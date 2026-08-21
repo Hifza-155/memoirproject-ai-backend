@@ -26,3 +26,4 @@ class User(Base):
     __table_args__ = (
         CheckConstraint("btrim(full_name) <> ''", name="user_account_name_not_blank"),
     )
+    

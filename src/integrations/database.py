@@ -31,3 +31,4 @@ def get_db():
         raise
     finally:
         db.close()
+        
