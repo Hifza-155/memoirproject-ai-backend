@@ -1,6 +1,24 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-app = FastAPI(title="Memoir App API") 
+from contextlib import asynccontextmanager
+import logging
+
+# Set up basic logging for startup/shutdown messages
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Lifespan Events (Startup & Shutdown)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting up FastAPI application...")
+    yield
+    logger.info("Shutting down FastAPI application...")
+    
+app = FastAPI(
+    title="Memoir App API",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 #CORS Configuration
 origins = [
