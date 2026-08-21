@@ -1,7 +1,7 @@
 # 1. We added CheckConstraint and Text here
 from sqlalchemy import Column, String, DateTime, CheckConstraint, Text
 from sqlalchemy.sql import func
-from database import Base
+from integrations.database import Base
 
 from sqlalchemy.dialects.postgresql import CITEXT, UUID
 import uuid
