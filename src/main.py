@@ -9,5 +9,4 @@ def read_root():
 # 3. Health Check Endpoint
 @app.get("/health")
 def health_check():
-    """Used by Docker containers and cloud hosting to verify the app is alive."""
     return {"status": "healthy"}
