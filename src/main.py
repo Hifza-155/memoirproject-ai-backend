@@ -9,6 +9,8 @@ load_dotenv()  # <-- THIS MUST BE AT THE VERY TOP BEFORE OTHER IMPORTS
 
 from fastapi import FastAPI
 from src.api.media import router as media_router
+from src.api.memoir import router as memoir_router
+
 
 app = FastAPI(
     title="Memoir App API",
@@ -27,3 +29,4 @@ def health_check():
 # INCLUDE FEATURE ROUTERS
 # -----------------------------------------------------------------
 app.include_router(media_router)
+app.include_router(memoir_router)
