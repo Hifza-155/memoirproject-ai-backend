@@ -1,29 +1,29 @@
 """
 @file models/media.py
-@description Pydantic validation models for media upload and metadata.
+@description Pydantic models for media presigned URL and metadata validation.
 """
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field , field_validator
 from typing import Optional
 
 class PresignedUrlRequest(BaseModel):
-    file_name: str = Field(..., description="Original name of the file")
-    file_type: str = Field(..., description="MIME type of the file (e.g., image/jpeg, audio/webm)")
-    file_size: int = Field(..., description="Size of the file in bytes", gt=0)
-
+    memoir_id: str = Field(..., description="UUID of the parent memoir")
+    filename: str = Field(..., description="Original name of the file being uploaded")
+    file_type: str = Field(..., description="MIME type of the file (e.g., image/jpeg, audio/mpeg)")
 
 class MediaMetadataRequest(BaseModel):
-    storage_key: str = Field(..., description="The unique storage path key returned from Supabase storage")
-    kind: str = Field(..., description="Media kind: either 'photo' or 'audio'")
+    memoir_id: str = Field(..., description="UUID of the parent memoir")
+    storage_key: str = Field(..., description="Storage path key in Supabase storage")
+    kind: str = Field(..., description="Media kind: 'photo', 'audio', or 'video'")
     mime_type: str = Field(..., description="MIME type of the file")
-    byte_size: int = Field(..., description="Size of the file in bytes", gt=0)
-    original_filename: Optional[str] = Field(None, description="Original filename from client")
-    duration_ms: Optional[int] = Field(None, description="Duration in milliseconds (required for audio, null for photos)")
-    width_px: Optional[int] = Field(None, description="Width in pixels (optional, for photos)")
-    height_px: Optional[int] = Field(None, description="Height in pixels (optional, for photos)")
-    caption: Optional[str] = Field(None, description="Optional text caption for the asset")
-    checksum_sha256: Optional[str] = Field(None, description="Optional SHA-256 checksum for deduplication")
-
+    byte_size: int = Field(..., description="Size of the file in bytes")
+    original_filename: Optional[str] = Field(None, description="Original filename")
+    duration_ms: Optional[int] = Field(None, description="Duration in milliseconds (null for photos)")
+    width_px: Optional[int] = Field(None, description="Width in pixels (null for audio)")
+    height_px: Optional[int] = Field(None, description="Height in pixels (null for audio)")
+    caption: Optional[str] = Field(None, description="Optional caption for the media")
+    checksum_sha256: Optional[str] = Field(None, description="Optional file checksum")
+    
     @field_validator('kind')
     @classmethod
     def validate_media_kind(cls, v: str) -> str:
