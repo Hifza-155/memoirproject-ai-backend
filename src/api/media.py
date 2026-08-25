@@ -1,30 +1,31 @@
 """
 @file api/media.py
-@description FastAPI router handling HTTP endpoints for media presigned URLs and metadata recording.
+@description FastAPI router for media presigned URLs and metadata.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from src.models.media import PresignedUrlRequest, MediaMetadataRequest
 from src.domain.media_service import MediaService
 
-router = APIRouter(prefix="/api/media", tags=["Media Upload & Metadata"])
+router = APIRouter(prefix="/api/media", tags=["Media Management"])
 
-# Valid dummy UUIDs for mock testing so Postgres doesn't reject them
-MOCK_SESSION = {
-    "id": "00000000-0000-0000-0000-000000000001",
-    "memoir_id": "00000000-0000-0000-0000-000000000002",
-    "participant_id": "00000000-0000-0000-0000-000000000003"
+# Session only provides the authenticated user's ID
+MOCK_USER_SESSION = {
+    "user_id": "1c65d3b5-0de1-47a0-82cc-ea1f210c596c"
 }
 
 @router.post("/presigned-url")
 def create_presigned_url(
     payload: PresignedUrlRequest, 
-    user_session: dict = Depends(lambda: MOCK_SESSION)
+    user_session: dict = Depends(lambda: MOCK_USER_SESSION)
 ):
-    if not user_session or not user_session.get("id") or not user_session.get("memoir_id"):
+    """
+    Generates a presigned storage URL after validating user permissions for the requested memoir.
+    """
+    if not user_session or not user_session.get("user_id"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="You must be logged in as a memoir owner to upload media."
+            detail="You must be logged in to upload media."
         )
 
     data = MediaService.generate_presigned_url(payload, user_session)
@@ -33,21 +34,20 @@ def create_presigned_url(
         "data": data
     }
 
-
 @router.post("/metadata", status_code=status.HTTP_201_CREATED)
-def save_media_metadata(
+def save_metadata(
     payload: MediaMetadataRequest,
-    user_session: dict = Depends(lambda: MOCK_SESSION)
+    user_session: dict = Depends(lambda: MOCK_USER_SESSION)
 ):
-    if not user_session or not user_session.get("memoir_id") or not user_session.get("participant_id"):
+    if not user_session or not user_session.get("user_id"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized: Missing user session or participant context."
+            detail="User session is missing user ID."
         )
 
     saved_record = MediaService.save_metadata(payload, user_session)
     return {
         "success": True,
-        "message": "Media metadata successfully recorded.",
+        "message": "Media metadata successfully saved.",
         "data": saved_record
     }
