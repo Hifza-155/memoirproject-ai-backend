@@ -1,10 +1,9 @@
 """
 @file domain/media_service.py
-@description Business logic and orchestration for media operations and database insertion.
+@description Production-ready media service using the official Supabase Storage SDK 
+             to generate cryptographically signed upload URLs and handle metadata.
 """
 
-import time
-import re
 from fastapi import HTTPException, status
 from src.integrations.supabase_client import supabase
 from src.models.media import PresignedUrlRequest, MediaMetadataRequest
@@ -13,97 +12,112 @@ class MediaService:
 
     @staticmethod
     def generate_presigned_url(payload: PresignedUrlRequest, user_session: dict) -> dict:
-        ALLOWED_MIME_TYPES = {
-            "audio/webm", "audio/mp4", "audio/mpeg", "audio/wav",
-            "image/jpeg", "image/png", "image/webp"
-        }
-        MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50MB limit
+        user_id = user_session.get("user_id")
+        memoir_id = payload.memoir_id
 
-        if payload.file_type not in ALLOWED_MIME_TYPES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"The file type '{payload.file_type}' is not supported."
-            )
-
-        if payload.file_size > MAX_FILE_SIZE_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="File size exceeds the maximum allowed limit of 50MB."
-            )
-
-        sanitized_file_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', payload.file_name)
-        file_path = f"memories/{user_session['memoir_id']}/{int(time.time())}_{sanitized_file_name}"
-
-        response = supabase.storage.from_("media-bucket").create_signed_upload_url(file_path)
-
-        if not response or "signedUrl" not in response:
+        # 1. Verify user authorization against the memoir_participant table
+        try:
+            participant_res = supabase.table("memoir_participant") \
+                .select("id, role") \
+                .eq("memoir_id", memoir_id) \
+                .eq("user_id", user_id) \
+                .execute()
+        except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to generate presigned upload URL from storage provider."
+                detail=f"Database error while verifying upload permissions: {str(e)}"
             )
 
+        if not participant_res or not participant_res.data:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to upload media to this memoir."
+            )
+
+        # 2. Define storage path and bucket name
+        storage_path = f"memories/{memoir_id}/{payload.filename}"
+        bucket_name = "media-bucket"  # Ensure this bucket is created in your Supabase project
+
+        # 3. Generate real cryptographically signed upload URL using Supabase Storage SDK
+        try:
+            response = supabase.storage.from_(bucket_name).create_signed_upload_url(storage_path)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to generate signed upload URL from storage: {str(e)}"
+            )
+
+        if not response:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Received empty response from storage provider."
+            )
+
+        # Extract signed URL and token from the storage response object/dict
+        signed_url = response.get("signedUrl") or response.get("signed_url")
+        token = response.get("token")
+
         return {
-            "signedUrl": response["signedUrl"],
-            "path": response["path"],
-            "token": response.get("token")
+            "storage_key": storage_path,
+            "upload_url": signed_url,
+            "token": token
         }
 
     @staticmethod
     def save_metadata(payload: MediaMetadataRequest, user_session: dict) -> dict:
-        memoir_id = user_session["memoir_id"]
-        participant_id = user_session["participant_id"]
+        user_id = user_session.get("user_id")
+        memoir_id = payload.memoir_id
 
-        # Enforce database constraints and rules
-        if payload.kind == "photo":
-            if payload.duration_ms is not None:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Constraint Violation: Photos cannot have a duration."
-                )
-            transcription_status = "skipped"
-        else:  # audio
-            if payload.duration_ms is None or payload.duration_ms <= 0:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Constraint Violation: Audio assets require a valid positive duration in milliseconds."
-                )
-            transcription_status = "pending"
+        # Verify participant status against table
+        try:
+            participant_res = supabase.table("memoir_participant") \
+                .select("id") \
+                .eq("memoir_id", memoir_id) \
+                .eq("user_id", user_id) \
+                .execute()
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Database error while looking up participant: {str(e)}"
+            )
 
-        asset_data = {
+        if not participant_res or not participant_res.data:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="User is not a registered participant of this memoir."
+            )
+
+        participant_id = participant_res.data[0]["id"]
+
+        media_data = {
             "memoir_id": memoir_id,
-            "kind": payload.kind,
+            "uploaded_by_participant_id": participant_id,
             "storage_key": payload.storage_key,
+            "kind": payload.kind,
             "mime_type": payload.mime_type,
             "byte_size": payload.byte_size,
-            "checksum_sha256": payload.checksum_sha256,
             "original_filename": payload.original_filename,
             "duration_ms": payload.duration_ms,
             "width_px": payload.width_px,
             "height_px": payload.height_px,
             "caption": payload.caption,
+            "checksum_sha256": payload.checksum_sha256,
             "storage_tier": "hot",
-            "transcription_status": transcription_status,
-            "uploaded_by_participant_id": participant_id
+            "transcription_status": "skipped" if payload.kind == "photo" else "pending"
         }
 
         try:
-            db_response = supabase.table("media_asset").insert(asset_data).execute()
+            db_response = supabase.table("media_asset").insert(media_data).execute()
         except Exception as e:
-            error_message = str(e)
-            if "unique constraint" in error_message.lower() or "duplicate key" in error_message.lower():
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="A media asset with this storage key already exists."
-                )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Database error: {error_message}"
+                detail=f"Database error while saving media metadata: {str(e)}"
             )
 
         if not db_response or not db_response.data:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to save media metadata to the database."
+                detail="Failed to save media metadata record in database."
             )
 
         return db_response.data[0]
