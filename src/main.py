@@ -1,44 +1,29 @@
+"""
+@file main.py
+@description Entry point for the FastAPI application. Loads environment variables 
+and mounts all API routers.
+"""
+
+from dotenv import load_dotenv
+load_dotenv()  # <-- THIS MUST BE AT THE VERY TOP BEFORE OTHER IMPORTS
+
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-import logging
+from src.api.media import router as media_router
 
-# Set up basic logging for startup/shutdown messages
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# (Startup & Shutdown)
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("Starting up FastAPI application...")
-    yield
-    logger.info("Shutting down FastAPI application...")
-    
 app = FastAPI(
     title="Memoir App API",
-    version="1.0.0",
-    lifespan=lifespan
+    version="1.0.0"
 )
 
-#CORS Configuration
-origins = [
-    "http://localhost:3000"
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],  # Allows GET, POST, PUT, DELETE, etc.
-    allow_headers=["*"],  # Allows all request headers
-)
-
-# Root endpoint
-@app.get("/")
+@app.get("/", tags=["Root"])
 def read_root():
-    return {"message": "API is successfully running!"}
+    return {"message": "Welcome to the Memoir App API"}
 
-# Health Check Endpoint
-@app.get("/health")
+@app.get("/health", tags=["Health"])
 def health_check():
     return {"status": "healthy"}
+
+# -----------------------------------------------------------------
+# INCLUDE FEATURE ROUTERS
+# -----------------------------------------------------------------
+app.include_router(media_router)
