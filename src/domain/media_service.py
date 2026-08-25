@@ -1,74 +1,24 @@
 """
 @file domain/media_service.py
-@description Production-ready media service using the official Supabase Storage SDK 
-             to generate cryptographically signed upload URLs and handle metadata.
+@description Modularized and secure media service.
 """
 
+import os
 from fastapi import HTTPException, status
 from src.integrations.supabase_client import supabase
 from src.models.media import PresignedUrlRequest, MediaMetadataRequest
+from src.core.config import (
+    STORAGE_BUCKET_NAME, 
+    STORAGE_TIER_HOT, 
+    TRANSCRIPTION_STATUS_SKIPPED, 
+    TRANSCRIPTION_STATUS_PENDING
+)
 
 class MediaService:
 
     @staticmethod
-    def generate_presigned_url(payload: PresignedUrlRequest, user_session: dict) -> dict:
-        user_id = user_session.get("user_id")
-        memoir_id = payload.memoir_id
-
-        # 1. Verify user authorization against the memoir_participant table
-        try:
-            participant_res = supabase.table("memoir_participant") \
-                .select("id, role") \
-                .eq("memoir_id", memoir_id) \
-                .eq("user_id", user_id) \
-                .execute()
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Database error while verifying upload permissions: {str(e)}"
-            )
-
-        if not participant_res or not participant_res.data:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You are not authorized to upload media to this memoir."
-            )
-
-        # 2. Define storage path and bucket name
-        storage_path = f"memories/{memoir_id}/{payload.filename}"
-        bucket_name = "media-bucket"  # Ensure this bucket is created in your Supabase project
-
-        # 3. Generate real cryptographically signed upload URL using Supabase Storage SDK
-        try:
-            response = supabase.storage.from_(bucket_name).create_signed_upload_url(storage_path)
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to generate signed upload URL from storage: {str(e)}"
-            )
-
-        if not response:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Received empty response from storage provider."
-            )
-
-        # Extract signed URL and token from the storage response object/dict
-        signed_url = response.get("signedUrl") or response.get("signed_url")
-        token = response.get("token")
-
-        return {
-            "storage_key": storage_path,
-            "upload_url": signed_url,
-            "token": token
-        }
-
-    @staticmethod
-    def save_metadata(payload: MediaMetadataRequest, user_session: dict) -> dict:
-        user_id = user_session.get("user_id")
-        memoir_id = payload.memoir_id
-
-        # Verify participant status against table
+    def _verify_participant(memoir_id: str, user_id: str) -> str:
+        """Helper to verify participant access and return participant ID."""
         try:
             participant_res = supabase.table("memoir_participant") \
                 .select("id") \
@@ -78,16 +28,73 @@ class MediaService:
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Database error while looking up participant: {str(e)}"
+                detail=f"Database error while verifying permissions: {str(e)}"
             )
 
         if not participant_res or not participant_res.data:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="User is not a registered participant of this memoir."
+                detail="You are not authorized to perform this action on this memoir."
+            )
+        return participant_res.data[0]["id"]
+
+    @staticmethod
+    def _verify_file_in_storage(storage_key: str):
+        """Helper to ensure file physically exists in Supabase storage before saving metadata."""
+        folder_path = os.path.dirname(storage_key)
+        filename = os.path.basename(storage_key)
+
+        try:
+            list_res = supabase.storage.from_(STORAGE_BUCKET_NAME).list(folder_path, {"search": filename})
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to verify file existence in storage: {str(e)}"
             )
 
-        participant_id = participant_res.data[0]["id"]
+        file_found = any(item.get("name") == filename for item in (list_res or []))
+        if not file_found:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The file has not been uploaded to storage yet or the storage key is invalid."
+            )
+
+    @classmethod
+    def generate_presigned_url(cls, payload: PresignedUrlRequest, user_session: dict) -> dict:
+        user_id = user_session.get("user_id")
+        memoir_id = payload.memoir_id
+
+        cls._verify_participant(memoir_id, user_id)
+
+        storage_path = f"memories/{memoir_id}/{payload.filename}"
+
+        try:
+            response = supabase.storage.from_(STORAGE_BUCKET_NAME).create_signed_upload_url(storage_path)
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to generate signed upload URL: {str(e)}"
+            )
+
+        return {
+            "storage_key": storage_path,
+            "upload_url": response.get("signedUrl") or response.get("signed_url"),
+            "token": response.get("token")
+        }
+
+    @classmethod
+    def save_metadata(cls, payload: MediaMetadataRequest, user_session: dict) -> dict:
+        user_id = user_session.get("user_id")
+        memoir_id = payload.memoir_id
+
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User session is missing user ID."
+            )
+
+        participant_id = cls._verify_participant(memoir_id, user_id)
+        cls._verify_file_in_storage(payload.storage_key)
 
         media_data = {
             "memoir_id": memoir_id,
@@ -102,8 +109,8 @@ class MediaService:
             "height_px": payload.height_px,
             "caption": payload.caption,
             "checksum_sha256": payload.checksum_sha256,
-            "storage_tier": "hot",
-            "transcription_status": "skipped" if payload.kind == "photo" else "pending"
+            "storage_tier": STORAGE_TIER_HOT,
+            "transcription_status": TRANSCRIPTION_STATUS_SKIPPED if payload.kind == "photo" else TRANSCRIPTION_STATUS_PENDING
         }
 
         try:
