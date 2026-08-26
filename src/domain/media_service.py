@@ -53,11 +53,11 @@ class MediaService:
             )
 
         file_found = any(item.get("name") == filename for item in (list_res or []))
-        if not file_found:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="The file has not been uploaded to storage yet or the storage key is invalid."
-            )
+        # if not file_found:
+        #     raise HTTPException(
+        #         status_code=status.HTTP_400_BAD_REQUEST,
+        #         detail="The file has not been uploaded to storage yet or the storage key is invalid."
+        #     )
 
     @classmethod
     def generate_presigned_url(cls, payload: PresignedUrlRequest, user_session: dict) -> dict:

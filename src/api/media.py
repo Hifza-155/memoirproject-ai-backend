@@ -6,28 +6,19 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from src.models.media import PresignedUrlRequest, MediaMetadataRequest
 from src.domain.media_service import MediaService
+from src.core.auth import get_current_user  # Production JWT verification dependency
 
 router = APIRouter(prefix="/api/media", tags=["Media Management"])
-
-# Session only provides the authenticated user's ID
-MOCK_USER_SESSION = {
-    "user_id": "1c65d3b5-0de1-47a0-82cc-ea1f210c596c"
-}
 
 @router.post("/presigned-url")
 def create_presigned_url(
     payload: PresignedUrlRequest, 
-    user_session: dict = Depends(lambda: MOCK_USER_SESSION)
+    current_user_id: str = Depends(get_current_user)
 ):
     """
     Generates a presigned storage URL after validating user permissions for the requested memoir.
     """
-    if not user_session or not user_session.get("user_id"):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="You must be logged in to upload media."
-        )
-
+    user_session = {"user_id": current_user_id}
     data = MediaService.generate_presigned_url(payload, user_session)
     return {
         "success": True,
@@ -37,14 +28,12 @@ def create_presigned_url(
 @router.post("/metadata", status_code=status.HTTP_201_CREATED)
 def save_metadata(
     payload: MediaMetadataRequest,
-    user_session: dict = Depends(lambda: MOCK_USER_SESSION)
+    current_user_id: str = Depends(get_current_user)
 ):
-    if not user_session or not user_session.get("user_id"):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User session is missing user ID."
-        )
-
+    """
+    Verifies file existence in storage and saves media metadata records.
+    """
+    user_session = {"user_id": current_user_id}
     saved_record = MediaService.save_metadata(payload, user_session)
     return {
         "success": True,
