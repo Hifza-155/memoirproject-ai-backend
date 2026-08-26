@@ -6,19 +6,20 @@
 from fastapi import APIRouter, Depends, status
 from src.models.memory import MemoryCreateRequest, MemoryUpdateRequest
 from src.domain.memory_service import MemoryService
+from src.core.auth import get_current_user  # Production JWT verification dependency
 
 router = APIRouter(prefix="/api/memories", tags=["Memories"])
 
-# Mock session dependency matching your testing setup
-def get_current_user_session():
-    return {"user_id": "1c65d3b5-0de1-47a0-82cc-ea1f210c596c"}
-
 @router.post("", status_code=status.HTTP_201_CREATED)
-def create_memory(payload: MemoryCreateRequest, user_session: dict = Depends(get_current_user_session)):
+def create_memory(
+    payload: MemoryCreateRequest, 
+    current_user_id: str = Depends(get_current_user)
+):
     """
     Create a new memory entry. Supports combining text, voice recordings, 
     and photographs into a single memory using media asset IDs.
     """
+    user_session = {"user_id": current_user_id}
     result = MemoryService.create_memory(payload, user_session)
     return {
         "success": True,
@@ -27,11 +28,15 @@ def create_memory(payload: MemoryCreateRequest, user_session: dict = Depends(get
     }
 
 @router.get("", status_code=status.HTTP_200_OK)
-def get_memoir_feed(memoir_id: str, user_session: dict = Depends(get_current_user_session)):
+def get_memoir_feed(
+    memoir_id: str, 
+    current_user_id: str = Depends(get_current_user)
+):
     """
     Fetch all memories for the memoir owner dashboard feed. 
     Handles intentional empty states if no memories exist yet.
     """
+    user_session = {"user_id": current_user_id}
     feed_result = MemoryService.get_memoir_feed(memoir_id, user_session)
     return {
         "success": True,
@@ -40,8 +45,12 @@ def get_memoir_feed(memoir_id: str, user_session: dict = Depends(get_current_use
     }
 
 @router.delete("/{memory_id}", status_code=status.HTTP_200_OK)
-def delete_memory(memory_id: str, user_session: dict = Depends(get_current_user_session)):
+def delete_memory(
+    memory_id: str, 
+    current_user_id: str = Depends(get_current_user)
+):
     """
     Delete a memory entry by ID (allowed before publication only).
     """
+    user_session = {"user_id": current_user_id}
     return MemoryService.delete_memory(memory_id, user_session)

@@ -4,7 +4,7 @@
 """
 
 from fastapi import HTTPException, status
-from src.integrations.supabase_client import supabase
+from src.integrations.supabase_client import supabase_admin
 from src.models.memoir import MemoirCreateRequest
 
 class MemoirService:
@@ -19,9 +19,9 @@ class MemoirService:
                 detail="User session is missing user ID."
             )
 
-        # 1. Fetch user account details (to get full_name and email for the participant record)
+        # 1. Fetch user account details using supabase_admin
         try:
-            user_res = supabase.table("user_account").select("full_name, email").eq("id", user_id).execute()
+            user_res = supabase_admin.table("user_account").select("full_name, email").eq("id", user_id).execute()
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -46,8 +46,8 @@ class MemoirService:
         }
 
         try:
-            # 3. Insert the root memoir
-            db_response = supabase.table("memoir").insert(memoir_data).execute()
+            # 3. Insert the root memoir using supabase_admin (bypasses RLS for server-side orchestration)
+            db_response = supabase_admin.table("memoir").insert(memoir_data).execute()
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -74,7 +74,7 @@ class MemoirService:
         }
 
         try:
-            supabase.table("memoir_participant").insert(participant_data).execute()
+            supabase_admin.table("memoir_participant").insert(participant_data).execute()
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

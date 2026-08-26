@@ -4,8 +4,8 @@
 """
 
 from fastapi import HTTPException, status
-from src.integrations.supabase_client import supabase
 from src.models.memory import MemoryCreateRequest
+from src.integrations.supabase_client import supabase_admin
 
 class MemoryService:
 
@@ -13,7 +13,7 @@ class MemoryService:
     def _verify_participant(memoir_id: str, user_id: str) -> str:
         """Helper to verify participant access and return participant ID."""
         try:
-            participant_res = supabase.table("memoir_participant") \
+            participant_res = supabase_admin.table("memoir_participant") \
                 .select("id") \
                 .eq("memoir_id", memoir_id) \
                 .eq("user_id", user_id) \
@@ -47,7 +47,7 @@ class MemoryService:
         }
 
         try:
-            mem_res = supabase.table("memory").insert(memory_data).execute()
+            mem_res = supabase_admin.table("memory").insert(memory_data).execute()
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -74,7 +74,7 @@ class MemoryService:
                 for media_id in payload.media_asset_ids
             ]
             try:
-                supabase.table("memory_media").insert(link_records).execute()
+                supabase_admin.table("memory_media").insert(link_records).execute()
             except Exception as e:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -88,7 +88,7 @@ class MemoryService:
         cls._verify_participant(memoir_id, user_id)
 
         try:
-            memories_res = supabase.table("memory") \
+            memories_res = supabase_admin.table("memory") \
                 .select("*") \
                 .eq("memoir_id", memoir_id) \
                 .is_("deleted_at", "null") \
@@ -121,7 +121,7 @@ class MemoryService:
         user_id = user_session.get("user_id")
 
         try:
-            mem_res = supabase.table("memory").select("memoir_id, status").eq("id", memory_id).execute()
+            mem_res = supabase_admin.table("memory").select("memoir_id, status").eq("id", memory_id).execute()
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -135,8 +135,7 @@ class MemoryService:
             raise HTTPException(status_code=400, detail="Cannot delete a published memory.")
 
         try:
-            supabase.table("memory").delete().eq("id", memory_id).execute()
+            supabase_admin.table("memory").delete().eq("id", memory_id).execute()
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to delete memory: {str(e)}")
-
         return {"success": True, "message": "Memory successfully deleted."}
