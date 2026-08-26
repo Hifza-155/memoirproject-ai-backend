@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from src.api.media import router as media_router
 from src.api.memoir import router as memoir_router
 from src.api.memory import router as memory_router
+from src.api.auth import router as auth_router
 
 app = FastAPI(
     title="Memoir App API",
@@ -31,3 +32,4 @@ def health_check():
 app.include_router(media_router)
 app.include_router(memoir_router)
 app.include_router(memory_router)
+app.include_router(auth_router)
