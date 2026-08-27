@@ -56,38 +56,6 @@ class MediaService:
             )
         return participant_res.data[0]["id"]
 
-    @staticmethod
-    def _verify_file_in_storage(storage_key: str):
-        """
-        Verifies that an asset file physically exists in Supabase storage before 
-        committing its metadata record to the PostgreSQL database.
-
-        Args:
-            storage_key (str): The unique storage file path key to verify.
-
-        Raises:
-            HTTPException (500): If the storage list query fails.
-            HTTPException (400): If the file has not been uploaded to storage yet.
-        """
-        folder_path = os.path.dirname(storage_key)
-        filename = os.path.basename(storage_key)
-
-        try:
-            list_res = supabase.storage.from_(STORAGE_BUCKET_NAME).list(folder_path, {"search": filename})
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to verify file existence in storage: {str(e)}"
-            )
-
-        file_found = any(item.get("name") == filename for item in (list_res or []))
-        
-        if not file_found:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="The file has not been uploaded to storage yet or the storage key is invalid."
-            )
-
     @classmethod
     def generate_presigned_url(cls, payload: PresignedUrlRequest, user_session: dict) -> dict:
         """
@@ -153,7 +121,6 @@ class MediaService:
             )
 
         participant_id = cls._verify_participant(memoir_id, user_id)
-        cls._verify_file_in_storage(payload.storage_key)
 
         media_data = {
             "memoir_id": memoir_id,
