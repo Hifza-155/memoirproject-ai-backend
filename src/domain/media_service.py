@@ -1,12 +1,13 @@
 """
 @file domain/media_service.py
-@description Modularized and secure media service.
+@description Core business logic service managing memoir participant authorizations,
+presigned upload URL generation, storage verification, and database metadata persistence.
 """
 
 import os
 from fastapi import HTTPException, status
 from src.integrations.supabase_client import supabase
-from src.models.media import PresignedUrlRequest, MediaMetadataRequest
+from src.schemas.media import PresignedUrlRequest, MediaMetadataRequest
 from src.core.config import (
     STORAGE_BUCKET_NAME, 
     STORAGE_TIER_HOT, 
@@ -15,10 +16,27 @@ from src.core.config import (
 )
 
 class MediaService:
+    """
+    Handles business rules, participant access controls, and database record cataloging 
+    for media assets.
+    """
 
     @staticmethod
     def _verify_participant(memoir_id: str, user_id: str) -> str:
-        """Helper to verify participant access and return participant ID."""
+        """
+        Verifies whether a user is an authorized participant of a specific memoir container.
+
+        Args:
+            memoir_id (str): The unique identifier of the target memoir.
+            user_id (str): The unique identifier of the requesting user.
+
+        Returns:
+            str: The participant record ID associated with the user and memoir.
+
+        Raises:
+            HTTPException (500): If a database query error occurs.
+            HTTPException (403): If the user is not an authorized participant.
+        """
         try:
             participant_res = supabase.table("memoir_participant") \
                 .select("id") \
@@ -40,7 +58,17 @@ class MediaService:
 
     @staticmethod
     def _verify_file_in_storage(storage_key: str):
-        """Helper to ensure file physically exists in Supabase storage before saving metadata."""
+        """
+        Verifies that an asset file physically exists in Supabase storage before 
+        committing its metadata record to the PostgreSQL database.
+
+        Args:
+            storage_key (str): The unique storage file path key to verify.
+
+        Raises:
+            HTTPException (500): If the storage list query fails.
+            HTTPException (400): If the file has not been uploaded to storage yet.
+        """
         folder_path = os.path.dirname(storage_key)
         filename = os.path.basename(storage_key)
 
@@ -53,14 +81,29 @@ class MediaService:
             )
 
         file_found = any(item.get("name") == filename for item in (list_res or []))
-        # if not file_found:
-        #     raise HTTPException(
-        #         status_code=status.HTTP_400_BAD_REQUEST,
-        #         detail="The file has not been uploaded to storage yet or the storage key is invalid."
-        #     )
+        
+        if not file_found:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The file has not been uploaded to storage yet or the storage key is invalid."
+            )
 
     @classmethod
     def generate_presigned_url(cls, payload: PresignedUrlRequest, user_session: dict) -> dict:
+        """
+        Authorizes user access to a memoir and requests a secure, short-lived 
+        signed upload URL for direct browser-to-storage uploads.
+
+        Args:
+            payload (PresignedUrlRequest): The request payload containing memoir ID and file metadata.
+            user_session (dict): The active user session dictionary containing the user ID.
+
+        Returns:
+            dict: A dictionary containing the secure storage key, signed upload URL, and token.
+
+        Raises:
+            HTTPException (500): If Supabase fails to generate the signed upload URL.
+        """
         user_id = user_session.get("user_id")
         memoir_id = payload.memoir_id
 
@@ -84,6 +127,22 @@ class MediaService:
 
     @classmethod
     def save_metadata(cls, payload: MediaMetadataRequest, user_session: dict) -> dict:
+        """
+        Validates user session permissions, confirms physical file presence in cloud storage, 
+        and persists the media asset metadata record into PostgreSQL.
+
+        Args:
+            payload (MediaMetadataRequest): The validated media metadata object.
+            user_session (dict): The active user session dictionary containing the user ID.
+
+        Returns:
+            dict: The newly created database media asset record.
+
+        Raises:
+            HTTPException (401): If the user session lacks a valid user ID.
+            HTTPException (400): If the file does not physically exist in storage.
+            HTTPException (500): If database insertion fails.
+        """
         user_id = user_session.get("user_id")
         memoir_id = payload.memoir_id
 

@@ -1,16 +1,38 @@
 """
 @file domain/memoir_service.py
-@description Business logic and orchestration for creating memoirs and auto-assigning the owner participant.
+@description Business logic and orchestration service for creating memoir containers, 
+normalizing subject dates, and automatically registering the creator as the owner participant.
 """
 
 from fastapi import HTTPException, status
 from src.integrations.supabase_client import supabase_admin
-from src.models.memoir import MemoirCreateRequest
+from src.schemas.memoir import MemoirCreateRequest
+
 
 class MemoirService:
+    """
+    Handles business logic for memoir creation, account profile resolution,
+    and automatic participant role assignments.
+    """
 
     @staticmethod
     def create_memoir(payload: MemoirCreateRequest, user_session: dict) -> dict:
+        """
+        Validates user session authentication, fetches creator profile details, 
+        inserts a new memoir container record, and automatically registers the creator 
+        as an authorized participant with the 'owner' role.
+
+        Args:
+            payload (MemoirCreateRequest): The validated memoir creation request data.
+            user_session (dict): The active user session dictionary containing the user ID.
+
+        Returns:
+            dict: The newly created root memoir database record.
+
+        Raises:
+            HTTPException (401): If the user session is missing a valid user ID.
+            HTTPException (500): If database insertion or participant registration fails.
+        """
         user_id = user_session.get("user_id")
 
         if not user_id:
@@ -32,7 +54,7 @@ class MemoirService:
         display_name = user_record.get("full_name") or "Memoir Owner"
         user_email = user_record.get("email")
 
-        # 2. Prepare memoir payload
+        # 2. Prepare root memoir payload
         memoir_data = {
             "subject_name": payload.subject_name,
             "subject_born_on": str(payload.subject_born_on) if payload.subject_born_on else None,
@@ -46,7 +68,7 @@ class MemoirService:
         }
 
         try:
-            # 3. Insert the root memoir using supabase_admin (bypasses RLS for server-side orchestration)
+            # 3. Insert root memoir using supabase_admin (bypasses RLS for server-side orchestration)
             db_response = supabase_admin.table("memoir").insert(memoir_data).execute()
         except Exception as e:
             raise HTTPException(
