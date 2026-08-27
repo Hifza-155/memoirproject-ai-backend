@@ -4,7 +4,7 @@
 """
 
 from fastapi import APIRouter, Depends, status
-from src.models.memory import MemoryCreateRequest, MemoryUpdateRequest
+from src.schemas.memory import MemoryCreateRequest, MemoryUpdateRequest
 from src.domain.memory_service import MemoryService
 from src.core.auth import get_current_user  # Production JWT verification dependency
 

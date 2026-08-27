@@ -4,7 +4,7 @@
 """
 
 from fastapi import APIRouter, status
-from src.models.auth import UserRegisterRequest
+from src.schemas.auth import UserRegisterRequest, UserLoginRequest # Import login request schema
 from src.domain.auth_service import AuthService
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
@@ -24,5 +24,24 @@ def register_user_endpoint(payload: UserRegisterRequest):
             "email": result["email"],
             "full_name": result["full_name"],
             "access_token": result["access_token"]
+        }
+    }
+
+@router.post("/login", status_code=status.HTTP_200_OK)
+def login_user_endpoint(payload: UserLoginRequest):
+    """
+    Authenticates an existing user and returns their session access token.
+    """
+    result = AuthService.login_user(payload)
+    return {
+        "success": True,
+        "message": result.get("message", "Login successful"),
+        "access_token": result["access_token"], # Directly at top level for easy frontend parsing
+        "data": {
+            "user_id": result.get("user_id"),
+            "email": result.get("email"),
+            "full_name": result.get("full_name"),
+            "access_token": result["access_token"],
+            "active_memoir": result.get("active_memoir") # Optional: if fetched during login
         }
     }

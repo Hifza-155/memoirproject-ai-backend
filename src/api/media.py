@@ -3,8 +3,8 @@
 @description FastAPI router for media presigned URLs and metadata.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from src.models.media import PresignedUrlRequest, MediaMetadataRequest
+from fastapi import APIRouter, Depends, status
+from src.schemas.media import PresignedUrlRequest, MediaMetadataRequest
 from src.domain.media_service import MediaService
 from src.core.auth import get_current_user  # Production JWT verification dependency
 

@@ -4,7 +4,7 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from src.models.memoir import MemoirCreateRequest
+from src.schemas.memoir import MemoirCreateRequest
 from src.domain.memoir_service import MemoirService
 from src.core.auth import get_current_user  # Production JWT verification dependency
 
