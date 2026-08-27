@@ -1,30 +1,45 @@
 """
-@file models/memoir.py
-@description Pydantic validation models for creating a new memoir.
+@file memoir.py
+@description SQLAlchemy ORM model representing top-level memoir containers 
+that organize stories, media, and biographical details for a subject.
 """
+import uuid
+from datetime import date, datetime
 
-from pydantic import BaseModel, Field, model_validator
-from typing import Optional
-from datetime import date
+from sqlalchemy import String, Text, Date, DateTime, ForeignKey, CheckConstraint, func
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
 
-class MemoirCreateRequest(BaseModel):
-    subject_name: str = Field(..., description="Name of the subject of the memoir")
-    subject_born_on: Optional[date] = Field(None, description="Birth date of the subject (YYYY-MM-DD)")
-    subject_died_on: Optional[date] = Field(None, description="Death date of the subject (YYYY-MM-DD)")
-    subject_is_living: bool = Field(False, description="Whether the subject is currently alive")
-    description: Optional[str] = Field(None, description="Optional description or blurb for the memoir")
-    visibility: Optional[str] = Field("invited_only", description="Visibility setting: 'invited_only', 'public', or 'link_with_password'")
-    comment_policy: Optional[str] = Field("invited_only", description="Comment policy setting")
+from src.db.base import Base
 
-    @model_validator(mode='after')
-    def validate_memoir_constraints(self) -> 'MemoirCreateRequest':
-        # Mirroring SQL constraint: memoir_dates_ordered
-        if self.subject_born_on and self.subject_died_on:
-            if self.subject_born_on > self.subject_died_on:
-                raise ValueError("Subject birth date cannot be after their death date.")
-        
-        # Mirroring SQL constraint: memoir_living_has_no_death_date
-        if self.subject_is_living and self.subject_died_on is not None:
-            raise ValueError("A living subject cannot have a death date.")
-            
-        return self
+
+class Memoir(Base):
+    """
+    Represents an overarching memoir container (e.g., a biographical project)
+    owned by a user and focused on a specific subject.
+    """
+    __tablename__ = "memoir"
+    __table_args__ = (
+        CheckConstraint("status IN ('draft', 'published')", name="ck_memoir_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("user_account.id"), nullable=False, index=True
+    )
+    subject_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    subject_birth_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    subject_death_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cover_media_asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("media_asset.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="draft")
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), onupdate=func.now(), nullable=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
