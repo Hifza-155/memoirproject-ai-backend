@@ -10,8 +10,7 @@ from sqlalchemy import String, Text, DateTime, ForeignKey, CheckConstraint, Inde
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.db.base import Base
-
+from src.integrations.database import Base
 
 class Memory(Base):
     """
