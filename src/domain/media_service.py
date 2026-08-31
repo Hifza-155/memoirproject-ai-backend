@@ -1,24 +1,25 @@
 """
 @file domain/media_service.py
 @description Core business logic service managing memoir participant authorizations,
-presigned upload URL generation, storage verification, and database metadata persistence.
+secure path generation, upload validation, and database metadata persistence,
+fully decoupled from direct infrastructure calls and secured against path traversal.
 """
 
-import os
 from fastapi import HTTPException, status
-from src.integrations.supabase_client import supabase
+from src.integrations import media_repository
+from src.integrations import storage_adapter
 from src.schemas.media import PresignedUrlRequest, MediaMetadataRequest
 from src.core.config import (
-    STORAGE_BUCKET_NAME, 
     STORAGE_TIER_HOT, 
     TRANSCRIPTION_STATUS_SKIPPED, 
     TRANSCRIPTION_STATUS_PENDING
 )
 
+
 class MediaService:
     """
-    Handles business rules, participant access controls, and database record cataloging 
-    for media assets.
+    Handles business rules, participant access controls, security validations, 
+    and database record cataloging for media assets.
     """
 
     @staticmethod
@@ -38,11 +39,7 @@ class MediaService:
             HTTPException (403): If the user is not an authorized participant.
         """
         try:
-            participant_res = supabase.table("memoir_participant") \
-                .select("id") \
-                .eq("memoir_id", memoir_id) \
-                .eq("user_id", user_id) \
-                .execute()
+            participant_res = media_repository.fetch_participant(memoir_id, user_id)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -59,28 +56,33 @@ class MediaService:
     @classmethod
     def generate_presigned_url(cls, payload: PresignedUrlRequest, user_session: dict) -> dict:
         """
-        Authorizes user access to a memoir and requests a secure, short-lived 
-        signed upload URL for direct browser-to-storage uploads.
+        Authorizes user access to a memoir, validates file upload limits/types, 
+        generates a collision-free secure path, and requests a short-lived signed upload URL.
 
         Args:
-            payload (PresignedUrlRequest): The request payload containing memoir ID and file metadata.
+            payload (PresignedUrlRequest): The request payload containing memoir ID, MIME type, and size.
             user_session (dict): The active user session dictionary containing the user ID.
 
         Returns:
             dict: A dictionary containing the secure storage key, signed upload URL, and token.
 
         Raises:
-            HTTPException (500): If Supabase fails to generate the signed upload URL.
+            HTTPException (500): If the storage provider fails to generate the signed URL.
         """
         user_id = user_session.get("user_id")
         memoir_id = payload.memoir_id
 
         cls._verify_participant(memoir_id, user_id)
 
-        storage_path = f"memories/{memoir_id}/{payload.filename}"
+        # SECURITY FIX: Enforce file size and type validation via the storage adapter
+        media_type, extension = storage_adapter.validate_upload(payload.mime_type, payload.byte_size)
+        
+        # SECURITY FIX: Prevent path traversal by generating a secure UUID-based path key 
+        # instead of trusting raw user filenames.
+        storage_path = storage_adapter.build_key(memoir_id, media_type, extension)
 
         try:
-            response = supabase.storage.from_(STORAGE_BUCKET_NAME).create_signed_upload_url(storage_path)
+            upload_res = storage_adapter.create_signed_upload(storage_path)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -88,27 +90,27 @@ class MediaService:
             )
 
         return {
-            "storage_key": storage_path,
-            "upload_url": response.get("signedUrl") or response.get("signed_url"),
-            "token": response.get("token")
+            "storage_key": upload_res.path,
+            "upload_url": upload_res.signed_url,
+            "token": upload_res.token
         }
 
     @classmethod
     def save_metadata(cls, payload: MediaMetadataRequest, user_session: dict) -> dict:
         """
-        Validates user session permissions, confirms physical file presence in cloud storage, 
-        and persists the media asset metadata record into PostgreSQL.
+        Validates user session permissions, enforces tenant isolation on the storage key, 
+        prevents duplicate ghost records via checksum idempotency, and persists metadata.
 
         Args:
             payload (MediaMetadataRequest): The validated media metadata object.
             user_session (dict): The active user session dictionary containing the user ID.
 
         Returns:
-            dict: The newly created database media asset record.
+            dict: The newly created or existing database media asset record.
 
         Raises:
             HTTPException (401): If the user session lacks a valid user ID.
-            HTTPException (400): If the file does not physically exist in storage.
+            HTTPException (400): If the storage key fails cross-tenant prefix validation.
             HTTPException (500): If database insertion fails.
         """
         user_id = user_session.get("user_id")
@@ -121,6 +123,22 @@ class MediaService:
             )
 
         participant_id = cls._verify_participant(memoir_id, user_id)
+
+        # SECURITY FIX: Enforce tenant isolation — ensure the storage key explicitly belongs 
+        # to this memoir ID to prevent cross-tenant asset hijacking.
+        expected_prefix = f"memoirs/{memoir_id}/"
+        if not payload.storage_key.startswith(expected_prefix):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid storage key path for this memoir container."
+            )
+
+        # IDEMPOTENCY CHECK: Prevent duplicate media asset records if a request is retried
+        if payload.checksum_sha256:
+            existing = media_repository.check_existing_media_by_checksum(str(memoir_id), payload.checksum_sha256)
+            if existing:
+                # Return the existing record safely instead of creating a duplicate ghost row
+                return existing
 
         media_data = {
             "memoir_id": memoir_id,
@@ -136,11 +154,11 @@ class MediaService:
             "caption": payload.caption,
             "checksum_sha256": payload.checksum_sha256,
             "storage_tier": STORAGE_TIER_HOT,
-            "transcription_status": TRANSCRIPTION_STATUS_SKIPPED if payload.kind == "photo" else TRANSCRIPTION_STATUS_PENDING
+            "transcription_status": STORAGE_TIER_HOT if payload.kind == "photo" else TRANSCRIPTION_STATUS_PENDING
         }
 
         try:
-            db_response = supabase.table("media_asset").insert(media_data).execute()
+            db_response = media_repository.insert_media_metadata(media_data)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

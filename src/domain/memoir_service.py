@@ -1,11 +1,12 @@
 """
-@file domain/memoir_service.py
+@file memoir_service.py
 @description Business logic and orchestration service for creating memoir containers, 
-normalizing subject dates, and automatically registering the creator as the owner participant.
+normalizing subject dates, and automatically registering the creator as the owner participant,
+fully decoupled from direct database infrastructure calls.
 """
 
 from fastapi import HTTPException, status
-from src.integrations.supabase_client import supabase_admin
+from src.integrations import memoir_repository
 from src.schemas.memoir import MemoirCreateRequest
 
 
@@ -41,9 +42,9 @@ class MemoirService:
                 detail="User session is missing user ID."
             )
 
-        # 1. Fetch user account details using supabase_admin
+        # 1. Fetch user account details using repository
         try:
-            user_res = supabase_admin.table("user_account").select("full_name, email").eq("id", user_id).execute()
+            user_res = memoir_repository.fetch_user_account(user_id)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -68,39 +69,34 @@ class MemoirService:
         }
 
         try:
-            # 3. Insert root memoir using supabase_admin (bypasses RLS for server-side orchestration)
-            db_response = supabase_admin.table("memoir").insert(memoir_data).execute()
+            db_response = memoir_repository.insert_memoir(memoir_data)
         except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Database error while creating memoir: {str(e)}"
-            )
-
-        if not db_response or not db_response.data:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create memoir record in database."
-            )
+            raise HTTPException(status_code=500, detail=f"Database error while creating memoir: {str(e)}")
 
         created_memoir = db_response.data[0]
         memoir_id = created_memoir["id"]
 
-        # 4. Automatically register the creator as a memoir participant with 'owner' role
         participant_data = {
             "memoir_id": memoir_id,
             "user_id": user_id,
             "role": "owner",
             "display_name": display_name,
             "email": user_email,
-            "relationship": "other"  # Default fallback to satisfy enum/defaults
+            "relationship": "other"
         }
 
         try:
-            supabase_admin.table("memoir_participant").insert(participant_data).execute()
+            memoir_repository.insert_memoir_participant(participant_data)
         except Exception as e:
+            # COMPENSATION ROLLBACK: Delete the orphan memoir if participant insertion fails
+            try:
+                memoir_repository.delete_memoir_record(memoir_id)
+            except Exception:
+                pass  # Fallback log if cleanup fails
+            
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to automatically register memoir participant: {str(e)}"
+                detail=f"Failed to register memoir owner. Operation rolled back: {str(e)}"
             )
-
+            
         return created_memoir

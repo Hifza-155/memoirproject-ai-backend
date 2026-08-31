@@ -1,12 +1,13 @@
 """
-@file domain/memory_service.py
+@file memory_service.py
 @description Core business logic service managing memory creation with strict 
-date timeline normalization, media asset linking, feed retrieval, and lifecycle security.
+date timeline normalization, media asset linking, feed retrieval, and lifecycle security,
+fully decoupled from direct database infrastructure calls.
 """
 
 from fastapi import HTTPException, status
 from src.schemas.memory import MemoryCreateRequest
-from src.integrations.supabase_client import supabase_admin
+from src.integrations import memory_repository
 
 
 class MemoryService:
@@ -33,11 +34,7 @@ class MemoryService:
             HTTPException (403): If the user is not an authorized participant.
         """
         try:
-            participant_res = supabase_admin.table("memoir_participant") \
-                .select("id") \
-                .eq("memoir_id", memoir_id) \
-                .eq("user_id", user_id) \
-                .execute()
+            participant_res = memory_repository.fetch_participant(memoir_id, user_id)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -96,7 +93,7 @@ class MemoryService:
         }
 
         try:
-            mem_res = supabase_admin.table("memory").insert(memory_data).execute()
+            mem_res = memory_repository.insert_memory(memory_data)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -112,8 +109,19 @@ class MemoryService:
         new_memory = mem_res.data[0]
         memory_id = new_memory["id"]
 
-        # Associate attached media assets via the junction table if provided
+        # Associate attached media assets via the junction table with ownership verification
         if payload.media_asset_ids:
+            # SECURITY FIX: Ensure all media assets belong to this memoir (Flag 3)
+            owned_assets = memory_repository.verify_media_assets_belong_to_memoir(
+                payload.memoir_id, payload.media_asset_ids
+            )
+            
+            if len(owned_assets) != len(payload.media_asset_ids):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="One or more media assets do not belong to this memoir container."
+                )
+
             link_records = [
                 {
                     "memory_id": memory_id,
@@ -123,41 +131,23 @@ class MemoryService:
                 for media_id in payload.media_asset_ids
             ]
             try:
-                supabase_admin.table("memory_media").insert(link_records).execute()
+                memory_repository.insert_memory_media(link_records)
             except Exception as e:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Failed to link media assets to memory: {str(e)}"
-                )
-                
+                )            
         return new_memory
     
     @classmethod
-    def get_memoir_feed(cls, memoir_id: str, user_id: str) -> dict:
+    def get_memoir_feed(cls, memoir_id: str, user_id: str, limit: int = 20, offset: int = 0) -> dict:
         """
-        Retrieves all active, non-deleted memories associated with a memoir container,
-        ordered by creation timestamp in descending order.
-
-        Args:
-            memoir_id (str): The unique identifier of the memoir feed to query.
-            user_id (str): The unique identifier of the requesting user.
-
-        Returns:
-            dict: A structured dictionary containing feed metadata and list of memories.
-
-        Raises:
-            HTTPException (500): If database retrieval fails.
-            HTTPException (403): If the user lacks participant access.
+        Retrieves a paginated feed of active memories for a memoir.
         """
         cls._verify_participant(memoir_id, user_id)
 
         try:
-            memories_res = supabase_admin.table("memory") \
-                .select("*") \
-                .eq("memoir_id", memoir_id) \
-                .is_("deleted_at", "null") \
-                .order("created_at", desc=True) \
-                .execute()
+            memories_res = memory_repository.fetch_memoir_feed_records(memoir_id, limit=limit, offset=offset)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -166,54 +156,40 @@ class MemoryService:
 
         memories = memories_res.data or []
 
-        if not memories:
-            return {
-                "memoir_id": memoir_id,
-                "is_empty": True,
-                "message": "This memoir has no memories yet. Start capturing your first written, audio, or photographic memory below.",
-                "memories": []
-            }
-
         return {
             "memoir_id": memoir_id,
-            "is_empty": False,
+            "limit": limit,
+            "offset": offset,
+            "is_empty": len(memories) == 0 and offset == 0,
             "memories": memories
         }
-
+        
     @classmethod
-    def delete_memory(cls, memory_id: str, user_id: str) -> dict:
+    def delete_memory(cls, memoir_id: str, memory_id: str, user_id: str) -> dict:
         """
         Safely deletes a memory record after confirming participant ownership 
-        and ensuring the memory has not been published.
-
-        Args:
-            memory_id (str): The unique identifier of the memory to delete.
-            user_id (str): The unique identifier of the requesting user.
-
-        Returns:
-            dict: A success confirmation dictionary.
-
-        Raises:
-            HTTPException (404): If the memory record cannot be found.
-            HTTPException (400): If attempting to delete a published memory.
-            HTTPException (500): If database queries or deletion commands fail.
+        and ensuring the memory has not been published, fully tenant-scoped.
         """
+        # 1. Authorize participant first
+        cls._verify_participant(memoir_id, user_id)
+
+        # 2. Fetch memory safely scoped to this memoir
         try:
-            mem_res = supabase_admin.table("memory").select("memoir_id, status").eq("id", memory_id).execute()
+            mem_res = memory_repository.fetch_memory_by_id(memory_id, memoir_id)
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
         if not mem_res.data:
-            raise HTTPException(status_code=404, detail="Memory not found.")
+            raise HTTPException(status_code=404, detail="Memory not found in this memoir.")
 
         memory = mem_res.data[0]
-        cls._verify_participant(memory["memoir_id"], user_id)
 
-        if memory["status"] == "published":
-            raise HTTPException(status_code=400, detail="Cannot delete a published memory.")
+        if memory["status"] == "saved":
+            raise HTTPException(status_code=400, detail="Cannot delete a saved/finalized memory.")
 
+        # 3. Delete with strict tenant scoping
         try:
-            supabase_admin.table("memory").delete().eq("id", memory_id).execute()
+            memory_repository.delete_memory_record(memory_id, memoir_id)
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to delete memory: {str(e)}")
             
