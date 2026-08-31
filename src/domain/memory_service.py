@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from src.schemas.memory import MemoryCreateRequest
 from src.integrations import memory_repository
 from src.domain.authorization import verify_active_participant
+from src.integrations import storage_adapter
 
 class MemoryService:
     """
@@ -39,31 +40,20 @@ class MemoryService:
         )
         participant_id = participant["id"]
 
-        # Timeline Date Normalization:
-        # Ensures all 4 timeline parameters have valid values or are uniformly set to None.
-        if payload.occurred_start:
-            occ_start = str(payload.occurred_start)
-            occ_end = str(payload.occurred_end) if payload.occurred_end else occ_start
-            occ_precision = str(payload.occurred_precision) if payload.occurred_precision else "day"
-            dt_source = str(payload.date_source) if payload.date_source else "contributor"
-        else:
-            occ_start = None
-            occ_end = None
-            occ_precision = None
-            dt_source = None
-
+        # Timeline Date: Pass through exactly what the user sent without inventing defaults
         memory_data = {
-            "memoir_id": payload.memoir_id,
+            "memoir_id": str(payload.memoir_id),
+            "author_user_id": user_id,
             "author_participant_id": participant_id,
             "title": payload.title,
             "body_text": payload.body_text,
             "status": payload.status,
-            "occurred_start": occ_start,
-            "occurred_end": occ_end,
-            "occurred_precision": occ_precision,
-            "date_source": dt_source,
+            "occurred_start": payload.occurred_start.isoformat() if payload.occurred_start else None,
+            "occurred_end": payload.occurred_end.isoformat() if payload.occurred_end else None,
+            "occurred_precision": payload.occurred_precision,
+            "date_source": payload.date_source,
         }
-
+        
         try:
             mem_res = memory_repository.insert_memory(memory_data)
         except Exception as e:
@@ -112,28 +102,48 @@ class MemoryService:
         return new_memory
     
     @classmethod
-    def get_memoir_feed(cls, memoir_id: str, user_id: str, limit: int = 20, offset: int = 0) -> dict:
+    def get_memoir_feed(cls, memoir_id: str, user_id: str, limit: int = 20, offset: int = 0) -> list:
         """
-        Retrieves a paginated feed of active memories for a memoir.
+        Retrieves a paginated memoir memory feed for an active participant, 
+        hydrating all attached media assets with secure signed playback URLs.
         """
-        verify_active_participant(memoir_id, user_id)
+        # 1. Enforce active participant check
+        verify_active_participant(str(memoir_id), str(user_id))
+
+        # 2. Fetch paginated memory records using your repository function
         try:
-            memories_res = memory_repository.fetch_memoir_feed_records(memoir_id, limit=limit, offset=offset)
+            res = memory_repository.fetch_memoir_feed_records(str(memoir_id), limit, offset)
         except Exception as e:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Database error while fetching memoir feed: {str(e)}"
+                detail=f"Failed to fetch memoir feed: {str(e)}"
             )
 
-        memories = memories_res.data or []
+        memories = res.data if res and res.data else []
 
-        return {
-            "memoir_id": memoir_id,
-            "limit": limit,
-            "offset": offset,
-            "is_empty": len(memories) == 0 and offset == 0,
-            "memories": memories
-        }
+        # 3. Hydrate media assets with secure playback URLs
+        hydrated_memories = []
+        for mem in memories:
+            media_list = []
+            raw_links = mem.pop("memory_media", [])
+            for link in raw_links:
+                asset = link.get("media_asset")
+                if asset:
+                    storage_key = asset.get("storage_key")
+                    playback_url = None
+                    if storage_key:
+                        try:
+                            playback_url = storage_adapter.create_playback_url(storage_key)
+                        except Exception:
+                            playback_url = None
+                    
+                    asset["playback_url"] = playback_url
+                    media_list.append(asset)
+            
+            mem["media_assets"] = media_list
+            hydrated_memories.append(mem)
+
+        return hydrated_memories
         
     @classmethod
     def delete_memory(cls, memoir_id: str, memory_id: str, user_id: str) -> dict:

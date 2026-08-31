@@ -74,19 +74,8 @@ class MediaService:
     def save_metadata(cls, payload: MediaMetadataRequest, user_session: dict) -> dict:
         """
         Validates user session permissions, enforces tenant isolation on the storage key, 
+        confirms physical object existence in storage, validates kind-specific rules,
         prevents duplicate ghost records via checksum idempotency, and persists metadata.
-
-        Args:
-            payload (MediaMetadataRequest): The validated media metadata object.
-            user_session (dict): The active user session dictionary containing the user ID.
-
-        Returns:
-            dict: The newly created or existing database media asset record.
-
-        Raises:
-            HTTPException (401): If the user session lacks a valid user ID.
-            HTTPException (400): If the storage key fails cross-tenant prefix validation.
-            HTTPException (500): If database insertion fails.
         """
         user_id = user_session.get("user_id")
         memoir_id = payload.memoir_id
@@ -107,11 +96,29 @@ class MediaService:
                 detail="Invalid storage key path for this memoir container."
             )
 
+        # 1. STORAGE EXISTENCE CHECK: Verify the file actually exists in storage
+        try:
+            file_exists = storage_adapter.object_exists(payload.storage_key)
+        except Exception:
+            file_exists = False
+
+        if not file_exists:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="The referenced file does not exist in storage. Please upload the file first."
+            )
+
+        # 2. KIND-SPECIFIC VALIDATION: Ensure audio and video assets provide a valid duration
+        if payload.kind in ["audio", "video"] and (payload.duration_ms is None or payload.duration_ms <= 0):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Audio and video assets require a valid positive duration_ms."
+            )
+
         # IDEMPOTENCY CHECK: Prevent duplicate media asset records if a request is retried
         if payload.checksum_sha256:
             existing = media_repository.check_existing_media_by_checksum(str(memoir_id), payload.checksum_sha256)
             if existing:
-                # Return the existing record safely instead of creating a duplicate ghost row
                 return existing
 
         media_data = {
