@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from src.integrations import auth_repository
 from src.schemas.auth import UserRegisterRequest, UserLoginRequest
+from src.integrations.supabase_client import supabase
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ class AuthService:
     """
 
     @staticmethod
-    def register_user(payload: UserRegisterRequest) -> dict:
+    def register_user(cls, email: str, password: str, full_name: str | None = None) -> dict:
         """
         Registers a new user via Supabase Auth, provisions their profile metadata, 
         and explicitly syncs an entry into the public `user_account` database table.
@@ -37,51 +38,65 @@ class AuthService:
             HTTPException (400): If user creation returns an empty response (e.g., email already in use).
         """
         try:
-            response = auth_repository.auth_sign_up(payload.email, payload.password, payload.full_name)
+            response = supabase.auth.sign_up({
+                "email": email,
+                "password": password,
+                "options": {
+                    "data": {
+                        "full_name": full_name
+                    }
+                }
+            })
+            
+            user = getattr(response, "user", None)
+            session = getattr(response, "session", None)
+
+            # Edge Case 2: Email confirmation enabled -> session is None
+            if not session:
+                logger.info(f"Registration successful for {email}. Email confirmation pending.")
+                return {
+                    "success": True,
+                    "message": "Registration successful! Please check your email to confirm your account before signing in.",
+                    "requires_confirmation": True,
+                    "access_token": None,
+                    "user": {
+                        "id": getattr(user, "id", None),
+                        "email": email,
+                        "full_name": full_name
+                    }
+                }
+
+            # Normal immediate login session
+            logger.info(f"User successfully registered and authenticated: {email}")
+            return {
+                "success": True,
+                "message": "Registration successful.",
+                "requires_confirmation": False,
+                "access_token": session.access_token,
+                "refresh_token": session.refresh_token,
+                "user": {
+                    "id": getattr(user, "id", None),
+                    "email": email,
+                    "full_name": full_name
+                }
+            }
+
         except Exception as e:
+            error_msg = str(e).lower()
+            
+            # Edge Case 1: Catch duplicate email errors and return 409 Conflict instead of 500
+            if "already registered" in error_msg or "already exists" in error_msg or "user already registered" in error_msg:
+                logger.warning(f"Registration attempt failed - email already in use: {email}")
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="This email is already registered. Please sign in or use a different email address."
+                )
+            
+            logger.error(f"Unexpected Supabase auth registration error for {email}: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Supabase auth registration failed: {str(e)}"
             )
-
-        if not response or not response.user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Could not register user. Email may already be in use."
-            )
-
-        user_id = response.user.id
-
-        # Explicitly insert the user profile into public.user_account table via repository
-        try:
-            auth_repository.upsert_user_account(user_id, payload.email, payload.full_name)
-        except Exception as db_err:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"User created in auth, but failed to save profile to user_account: {str(db_err)}"
-            )
-
-        session = response.session
-        
-        # FIXED: Handle email confirmation requirement cleanly
-        if not session:
-            return {
-                "user_id": user_id,
-                "email": response.user.email,
-                "full_name": payload.full_name,
-                "access_token": None,
-                "message": "Registration successful. Please check your email to confirm your account before logging in."
-            }
-
-        access_token = session.access_token
-
-        return {
-            "user_id": user_id,
-            "email": response.user.email,
-            "full_name": payload.full_name,
-            "access_token": access_token,
-            "message": "User registered and profile provisioned successfully."
-        }
 
     @staticmethod
     def login_user(payload: UserLoginRequest) -> dict:
