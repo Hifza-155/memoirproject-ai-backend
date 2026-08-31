@@ -6,6 +6,7 @@ and mounts all modular feature routers.
 """
 
 from dotenv import load_dotenv
+from src.core.config import settings
 
 # CRITICAL: load_dotenv() must be called BEFORE any other application modules 
 # are imported so database and storage configurations can read environment variables.
@@ -31,12 +32,11 @@ app = FastAPI(
 # to allow secure communication with the Next.js frontend client.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Permits all HTTP methods (GET, POST, PUT, DELETE, OPTIONS, etc.)
-    allow_headers=["*"],  # Permits all headers for authenticated requests
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
 
 @app.get("/", tags=["Root"])
 def read_root():
