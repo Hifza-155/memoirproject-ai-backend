@@ -3,14 +3,14 @@
 @description FastAPI router handling HTTP endpoints for memoir creation and management.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from src.schemas.memoir import MemoirCreateRequest
+from fastapi import APIRouter, Depends, status
+from src.schemas.memoir import MemoirCreateRequest, MemoirResponseEnvelope
 from src.domain.memoir_service import MemoirService
-from src.core.auth import get_current_user  # Production JWT verification dependency
+from src.core.auth import get_current_user
 
 router = APIRouter(prefix="/api/memoirs", tags=["Memoirs"])
 
-@router.post("/", status_code=status.HTTP_201_CREATED)
+@router.post("/", status_code=status.HTTP_201_CREATED, response_model=MemoirResponseEnvelope)
 def create_memoir(
     payload: MemoirCreateRequest,
     current_user_id: str = Depends(get_current_user)

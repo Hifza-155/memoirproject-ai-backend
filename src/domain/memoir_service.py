@@ -81,7 +81,7 @@ class MemoirService:
             "role": "owner",
             "display_name": display_name,
             "email": user_email,
-            "relationship": "other"
+            "relationship": payload.relationship
         }
 
         try:

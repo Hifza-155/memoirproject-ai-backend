@@ -5,6 +5,8 @@ configures CORS middleware for frontend integration, defines health check endpoi
 and mounts all modular feature routers.
 """
 
+import logging
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from src.core.config import settings
 
@@ -21,22 +23,47 @@ from src.api.memoir import router as memoir_router
 from src.api.memory import router as memory_router
 from src.api.auth import router as auth_router
 
+
+def setup_logging():
+    """Configures root logging format and log level for backend services."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan context manager handling startup logging and shutdown events."""
+    setup_logging()
+    logging.info("Starting up Memoir backend application...")
+    yield
+    logging.info("Shutting down Memoir backend application...")
+
+
 # Initialize the core FastAPI application instance
 app = FastAPI(
     title="Memoir App API",
     version="1.0.0",
-    description="Backend API services for the Memoir life-story documentation platform."
+    description="Backend API services for the Memoir life-story documentation platform.",
+    lifespan=lifespan
 )
+
+# Parse CORS origins dynamically (supporting both comma-separated strings and lists from settings)
+origins = settings.cors_origins
+if isinstance(origins, str):
+    origins = [o.strip() for o in origins.split(",") if o.strip()]
 
 # Configure CORS (Cross-Origin Resource Sharing) middleware 
 # to allow secure communication with the Next.js frontend client.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 @app.get("/", tags=["Root"])
 def read_root():
