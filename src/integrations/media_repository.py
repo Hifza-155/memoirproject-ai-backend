@@ -22,6 +22,7 @@ def fetch_participant(memoir_id: str, user_id: str):
         .select("id") \
         .eq("memoir_id", memoir_id) \
         .eq("user_id", user_id) \
+        .is_("removed_at", "null") \
         .execute()
 
 

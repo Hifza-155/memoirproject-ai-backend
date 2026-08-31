@@ -8,7 +8,7 @@ fully decoupled from direct database infrastructure calls.
 from fastapi import HTTPException, status
 from src.schemas.memory import MemoryCreateRequest
 from src.integrations import memory_repository
-
+from src.domain.authorization import verify_active_participant
 
 class MemoryService:
     """
@@ -16,40 +16,8 @@ class MemoryService:
     timeline normalization, media-to-memory junction mapping, and feed processing.
     """
 
-    @staticmethod
-    def _verify_participant(memoir_id: str, user_id: str) -> str:
-        """
-        Verifies whether a user is an authorized participant permitted to manage 
-        memories for a specific memoir container.
-
-        Args:
-            memoir_id (str): The unique identifier of the target memoir.
-            user_id (str): The unique identifier of the requesting user.
-
-        Returns:
-            str: The unique participant record ID associated with the user and memoir.
-
-        Raises:
-            HTTPException (500): If a database query error occurs during verification.
-            HTTPException (403): If the user is not an authorized participant.
-        """
-        try:
-            participant_res = memory_repository.fetch_participant(memoir_id, user_id)
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Database error while verifying permissions: {str(e)}"
-            )
-
-        if not participant_res or not participant_res.data:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You are not authorized to manage memories for this memoir."
-            )
-        return participant_res.data[0]["id"]
-
     @classmethod
-    def create_memory(cls, payload: MemoryCreateRequest, user_session: dict) -> dict:
+    def create_memory(cls, payload: MemoryCreateRequest, user_id: str) -> dict:        
         """
         Validates participant permissions, normalizes timeline and date parameters, 
         persists the new memory entry, and maps any attached media asset IDs.
@@ -64,8 +32,12 @@ class MemoryService:
         Raises:
             HTTPException (500): If database insertion or media linking fails.
         """
-        user_id = user_session.get("user_id")
-        participant_id = cls._verify_participant(payload.memoir_id, user_id)
+        participant = verify_active_participant(
+        str(payload.memoir_id), 
+        user_id, 
+        required_roles=["owner", "admin", "contributor"]
+        )
+        participant_id = participant["id"]
 
         # Timeline Date Normalization:
         # Ensures all 4 timeline parameters have valid values or are uniformly set to None.
@@ -144,8 +116,7 @@ class MemoryService:
         """
         Retrieves a paginated feed of active memories for a memoir.
         """
-        cls._verify_participant(memoir_id, user_id)
-
+        verify_active_participant(memoir_id, user_id)
         try:
             memories_res = memory_repository.fetch_memoir_feed_records(memoir_id, limit=limit, offset=offset)
         except Exception as e:
@@ -167,13 +138,22 @@ class MemoryService:
     @classmethod
     def delete_memory(cls, memoir_id: str, memory_id: str, user_id: str) -> dict:
         """
-        Safely deletes a memory record after confirming participant ownership 
-        and ensuring the memory has not been published, fully tenant-scoped.
+        Safely soft-deletes a memory record after confirming the user is either 
+        the memory's author or a memoir owner/admin.
         """
-        # 1. Authorize participant first
-        cls._verify_participant(memoir_id, user_id)
+        # 1. Fetch participant details to check their role in this memoir
+        participant_res = memory_repository.fetch_participant(memoir_id, user_id)
+        if not participant_res.data:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not a participant of this memoir."
+            )
+        
+        participant = participant_res.data[0]
+        user_role = participant.get("role")  # e.g., 'owner', 'admin', 'contributor', 'viewer'
+        participant_id = participant.get("id")
 
-        # 2. Fetch memory safely scoped to this memoir
+        # 2. Fetch target memory strictly scoped to this memoir
         try:
             mem_res = memory_repository.fetch_memory_by_id(memory_id, memoir_id)
         except Exception as e:
@@ -184,13 +164,32 @@ class MemoryService:
 
         memory = mem_res.data[0]
 
-        if memory["status"] == "saved":
-            raise HTTPException(status_code=400, detail="Cannot delete a saved/finalized memory.")
+        # 3. SECURITY CHECK: Restrict deletion to Memoir Owners/Admins OR the Memory Author
+        is_owner_or_admin = user_role in ["owner", "admin"]
+        is_author = (
+            memory.get("author_user_id") == user_id or 
+            memory.get("author_participant_id") == participant_id
+        )
 
-        # 3. Delete with strict tenant scoping
+        if not (is_owner_or_admin or is_author):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to delete this memory."
+            )
+
+        if memory.get("status") == "saved":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot delete a saved/finalized memory."
+            )
+
+        # 4. Perform soft-delete (reversible, matching feed filter .is_('deleted_at', 'null'))
         try:
-            memory_repository.delete_memory_record(memory_id, memoir_id)
+            memory_repository.soft_delete_memory_record(memory_id, memoir_id)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to delete memory: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to delete memory: {str(e)}"
+            )
             
         return {"success": True, "message": "Memory successfully deleted."}

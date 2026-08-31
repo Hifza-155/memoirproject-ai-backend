@@ -16,6 +16,7 @@ def fetch_participant(memoir_id: str, user_id: str):
         .select("id") \
         .eq("memoir_id", memoir_id) \
         .eq("user_id", user_id) \
+        .is_("removed_at", "null") \
         .execute()
 
 
@@ -33,17 +34,18 @@ def insert_memory_media(link_records: list):
     return supabase_admin.table("memory_media").insert(link_records).execute()
 
 
-def fetch_memoir_feed_records(memoir_id: str):
+def fetch_memoir_feed_records(memoir_id: str, limit: int = 20, offset: int = 0):
     """
-    Retrieves all active, non-deleted memories associated with a memoir container.
+    Retrieves paginated active memories associated with a memoir container.
     """
+    end_index = offset + limit - 1
     return supabase_admin.table("memory") \
         .select("*") \
         .eq("memoir_id", memoir_id) \
         .is_("deleted_at", "null") \
         .order("created_at", desc=True) \
+        .range(offset, end_index) \
         .execute()
-
 
 def fetch_memory_by_id(memory_id: str, memoir_id: str):
     """
@@ -55,7 +57,6 @@ def fetch_memory_by_id(memory_id: str, memoir_id: str):
         .eq("id", memory_id) \
         .eq("memoir_id", memoir_id) \
         .execute()
-
 
 def delete_memory_record(memory_id: str, memoir_id: str):
     """
@@ -78,3 +79,16 @@ def verify_media_assets_belong_to_memoir(memoir_id: str, media_asset_ids: list[s
         .in_("id", media_asset_ids) \
         .execute()
     return res.data or []
+
+def soft_delete_memory_record(memory_id: str, memoir_id: str):
+    """
+    Performs a soft-delete on a memory record by setting the deleted_at timestamp, 
+    making deletions reversible and preserving data integrity.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    return supabase_admin.table("memory") \
+        .update({"deleted_at": now}) \
+        .eq("id", memory_id) \
+        .eq("memoir_id", memoir_id) \
+        .execute()

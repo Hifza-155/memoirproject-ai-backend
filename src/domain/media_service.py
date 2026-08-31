@@ -9,9 +9,10 @@ from fastapi import HTTPException, status
 from src.integrations import media_repository
 from src.integrations import storage_adapter
 from src.schemas.media import PresignedUrlRequest, MediaMetadataRequest
+from src.domain.authorization import verify_active_participant
+
 from src.core.config import (
     STORAGE_TIER_HOT, 
-    TRANSCRIPTION_STATUS_SKIPPED, 
     TRANSCRIPTION_STATUS_PENDING
 )
 
@@ -22,36 +23,6 @@ class MediaService:
     and database record cataloging for media assets.
     """
 
-    @staticmethod
-    def _verify_participant(memoir_id: str, user_id: str) -> str:
-        """
-        Verifies whether a user is an authorized participant of a specific memoir container.
-
-        Args:
-            memoir_id (str): The unique identifier of the target memoir.
-            user_id (str): The unique identifier of the requesting user.
-
-        Returns:
-            str: The participant record ID associated with the user and memoir.
-
-        Raises:
-            HTTPException (500): If a database query error occurs.
-            HTTPException (403): If the user is not an authorized participant.
-        """
-        try:
-            participant_res = media_repository.fetch_participant(memoir_id, user_id)
-        except Exception as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Database error while verifying permissions: {str(e)}"
-            )
-
-        if not participant_res or not participant_res.data:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You are not authorized to perform this action on this memoir."
-            )
-        return participant_res.data[0]["id"]
 
     @classmethod
     def generate_presigned_url(cls, payload: PresignedUrlRequest, user_session: dict) -> dict:
@@ -71,8 +42,12 @@ class MediaService:
         """
         user_id = user_session.get("user_id")
         memoir_id = payload.memoir_id
-
-        cls._verify_participant(memoir_id, user_id)
+        
+        verify_active_participant(
+            memoir_id, 
+            user_id, 
+            required_roles=["owner", "admin", "contributor"]
+        )
 
         # SECURITY FIX: Enforce file size and type validation via the storage adapter
         media_type, extension = storage_adapter.validate_upload(payload.mime_type, payload.byte_size)
@@ -116,13 +91,12 @@ class MediaService:
         user_id = user_session.get("user_id")
         memoir_id = payload.memoir_id
 
-        if not user_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="User session is missing user ID."
-            )
-
-        participant_id = cls._verify_participant(memoir_id, user_id)
+        participant = verify_active_participant(
+            memoir_id, 
+            user_id, 
+            required_roles=["owner", "admin", "contributor"]
+        )
+        participant_id = participant["id"]
 
         # SECURITY FIX: Enforce tenant isolation — ensure the storage key explicitly belongs 
         # to this memoir ID to prevent cross-tenant asset hijacking.

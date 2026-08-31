@@ -9,7 +9,6 @@ from fastapi import HTTPException, status
 from src.integrations import memoir_repository
 from src.schemas.memoir import MemoirCreateRequest
 
-
 class MemoirService:
     """
     Handles business logic for memoir creation, account profile resolution,
