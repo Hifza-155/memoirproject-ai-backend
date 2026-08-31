@@ -4,7 +4,7 @@
 """
 
 from fastapi import APIRouter, Depends, status
-from src.schemas.memory import MemoryCreateRequest, MemoryUpdateRequest
+from src.schemas.memory import MemoryCreateRequest
 from src.domain.memory_service import MemoryService
 from src.core.auth import get_current_user  # Production JWT verification dependency
 
@@ -27,30 +27,27 @@ def create_memory(
         "data": result
     }
 
-@router.get("", status_code=status.HTTP_200_OK)
-def get_memoir_feed(
+@router.get("/feed/{memoir_id}", status_code=status.HTTP_200_OK)
+def get_memoir_feed_route(
     memoir_id: str, 
-    current_user_id: str = Depends(get_current_user)
+    limit: int = 20, 
+    offset: int = 0, 
+    user_session: dict = Depends(get_current_user)
 ):
     """
-    Fetch all memories for the memoir owner dashboard feed. 
-    Handles intentional empty states if no memories exist yet.
+    API endpoint to fetch a paginated memory feed for a specific memoir container.
     """
-    user_session = {"user_id": current_user_id}
-    feed_result = MemoryService.get_memoir_feed(memoir_id, user_session)
-    return {
-        "success": True,
-        "message": "Memoir feed fetched successfully.",
-        "data": feed_result
-    }
+    user_id = user_session.get("user_id")
+    feed_data = MemoryService.get_memoir_feed(memoir_id, user_id, limit=limit, offset=offset)
+    return {"success": True, "data": feed_data}
 
-@router.delete("/{memory_id}", status_code=status.HTTP_200_OK)
-def delete_memory(
-    memory_id: str, 
-    current_user_id: str = Depends(get_current_user)
-):
+@router.delete("/memoirs/{memoir_id}/memories/{memory_id}", status_code=status.HTTP_200_OK)
+def delete_memory_route(memoir_id: str, memory_id: str, user_session: dict = Depends(get_current_user)):
     """
-    Delete a memory entry by ID (allowed before publication only).
+    API endpoint to delete a memory securely within a specific memoir container, 
+    returning a consistent response envelope.
     """
-    user_session = {"user_id": current_user_id}
-    return MemoryService.delete_memory(memory_id, user_session)
+    user_id = user_session.get("user_id")
+    result = MemoryService.delete_memory(memoir_id, memory_id, user_id)
+    
+    return {"success": True, "data": result}

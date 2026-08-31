@@ -1,25 +1,27 @@
 """
-@file models/memory.py
-@description Pydantic models for memory creation matching the schema.
+@file src/schemas/memory.py
+@description Pydantic request and response schemas for memory creation and management,
+enforcing strict status literals.
 """
 
-from typing import Optional, List
+from typing import Optional, Literal
 from pydantic import BaseModel, Field
+import uuid
+
 
 class MemoryCreateRequest(BaseModel):
-    memoir_id: str
-    title: Optional[str] = None
-    body_text: Optional[str] = None
-    status: str = "draft"
+    """
+    Validation schema for creating a new memory record.
+    """
+    memoir_id: uuid.UUID
+    title: str = Field(..., min_length=1, max_length=255)
+    body_text: str = Field(..., min_length=1)
+    
+    status: Literal["draft", "saved"] = "draft"
+    
+    media_asset_ids: Optional[list[uuid.UUID]] = None
     occurred_start: Optional[str] = None
     occurred_end: Optional[str] = None
     occurred_precision: Optional[str] = None
     date_source: Optional[str] = None
-    media_asset_ids: Optional[List[str]] = Field(default=[])
     
-class MemoryUpdateRequest(BaseModel):
-    title: Optional[str] = None
-    body_text: Optional[str] = None
-    status: Optional[str] = None
-    occurred_start: Optional[str] = None
-    media_asset_ids: Optional[List[str]] = Field(default=None, description="Updated list of media assets.")
