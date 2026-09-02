@@ -25,12 +25,14 @@ class MemoryCreateRequest(BaseModel):
     occurred_end: Optional[date] = Field(None, description="End date of when the memory took place")
     
     # Restrict precision and source fields to allowed enums
-    occurred_precision: Optional[Literal["exact", "month", "year", "circa"]] = Field(
-        "exact", description="Precision level of the occurrence date"
+    occurred_precision: Optional[Literal["day", "month", "year", "decade"]] = Field(
+    "day", description="Precision level of the occurrence date"
     )
-    date_source: Optional[Literal["user", "exif", "inferred"]] = Field(
-        "user", description="Source of the occurrence date"
-    )
+    
+    date_source: Optional[Literal["owner", "contributor", "ai"]] = Field(
+    "owner", 
+    description="Source of the memory authoring"
+)
     
     # Attached media assets
     media_asset_ids: Optional[List[uuid.UUID]] = Field(

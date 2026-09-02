@@ -13,7 +13,7 @@ def fetch_participant(memoir_id: str, user_id: str):
     Queries the database to verify if a user is an authorized participant of a memoir.
     """
     return supabase_admin.table("memoir_participant") \
-        .select("id") \
+        .select("*") \
         .eq("memoir_id", memoir_id) \
         .eq("user_id", user_id) \
         .is_("removed_at", "null") \

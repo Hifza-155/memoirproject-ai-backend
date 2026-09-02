@@ -13,13 +13,16 @@ router = APIRouter(prefix="/api/memoirs", tags=["Memoirs"])
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=MemoirResponseEnvelope)
 def create_memoir(
     payload: MemoirCreateRequest,
-    current_user_id: str = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Creates a new root memoir container for a subject. 
     This must be executed first to obtain a memoir_id before adding media or memories.
     """
-    user_session = {"user_id": current_user_id}
+    # extract user ID string from the dictionary
+    user_id = current_user.get("user_id") or current_user.get("id") or current_user.get("sub")
+    
+    user_session = {"user_id": user_id}
     new_memoir = MemoirService.create_memoir(payload, user_session)
     return {
         "success": True,

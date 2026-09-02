@@ -41,10 +41,10 @@ class MemoryService:
         participant_id = participant["id"]
 
         # Timeline Date: Pass through exactly what the user sent without inventing defaults
+        # Timeline Date: Pass through exactly what the user sent without inventing defaults
         memory_data = {
             "memoir_id": str(payload.memoir_id),
-            "author_user_id": user_id,
-            "author_participant_id": participant_id,
+            "author_participant_id": participant_id,  # <-- Keep this (links via participant table)
             "title": payload.title,
             "body_text": payload.body_text,
             "status": payload.status,

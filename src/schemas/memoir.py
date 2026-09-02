@@ -12,8 +12,9 @@ class MemoirCreateRequest(BaseModel):
     visibility: Optional[str] = Field("invited_only", description="Visibility setting: 'invited_only', 'public', or 'link_with_password'")
     comment_policy: Optional[str] = Field("invited_only", description="Comment policy setting")
     relationship: Optional[Literal[
-        "self", "mother", "father", "daughter", "son", 
-        "spouse", "sibling", "grandparent", "grandchild", "friend", "other"
+    "self", "spouse_partner", "parent", "child", 
+    "sibling", "grandchild", "extended_family", 
+    "friend", "colleague", "neighbour", "other"
     ]] = Field("other", description="Relationship of the creator to the memoir subject")
 
     @model_validator(mode='after')
