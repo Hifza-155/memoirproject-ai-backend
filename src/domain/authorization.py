@@ -4,7 +4,7 @@
 """
 
 from fastapi import HTTPException, status
-from src.integrations import memoir_repository  # or memory_repository
+from src.integrations import memoir_repository , memory_repository  
 
 
 def verify_active_participant(memoir_id: str, user_id: str, required_roles: list[str] = None) -> dict:
@@ -23,9 +23,13 @@ def verify_active_participant(memoir_id: str, user_id: str, required_roles: list
     Raises:
         HTTPException (403): If unauthorized, removed, or lacking the required role.
     """
-    from src.integrations import memory_repository  # Avoid circular imports if needed
+    if isinstance(user_id, dict):
+        user_id = user_id.get("user_id") or user_id.get("id") 
 
-    res = memory_repository.fetch_participant(str(memoir_id), str(user_id))
+    # Ensure it's explicitly a clean string
+    user_id_str = str(user_id)
+    
+    res = memory_repository.fetch_participant(str(memoir_id), user_id_str)
     if not res.data:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -33,7 +37,10 @@ def verify_active_participant(memoir_id: str, user_id: str, required_roles: list
         )
 
     participant = res.data[0]
-
+    
+    # 🔍 ADD THIS LINE TO INSPECT WHAT PYTHON ACTUALLY SEES
+    print("DEBUG PARTICIPANT FETCHED FROM DB:", participant)
+    
     # Explicit check for removed status (just in case query soft-filter is bypassed)
     if participant.get("removed_at") is not None:
         raise HTTPException(
@@ -44,6 +51,7 @@ def verify_active_participant(memoir_id: str, user_id: str, required_roles: list
     # If specific write/admin roles are required, enforce them
     if required_roles:
         user_role = participant.get("role")
+        print(f"DEBUG USER ROLE: '{user_role}' (Type: {type(user_role)})") # Check value & type
         if user_role not in required_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

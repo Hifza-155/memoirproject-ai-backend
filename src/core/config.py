@@ -50,3 +50,14 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# Storage tiers for media asset lifecycle management
+STORAGE_TIER_HOT = "hot"
+STORAGE_TIER_COLD = "cold"
+
+# Transcription status states for audio/video assets
+TRANSCRIPTION_STATUS_PENDING = "pending"
+TRANSCRIPTION_STATUS_COMPLETED = "completed"
+TRANSCRIPTION_STATUS_FAILED = "failed"
+
+SUPABASE_JWKS_URL = settings.supabase_jwks_url

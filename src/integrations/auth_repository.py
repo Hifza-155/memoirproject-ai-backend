@@ -23,30 +23,12 @@ def auth_sign_up(email: str, password: str, full_name: str):
         "email": email,
         "password": password,
         "options": {
+            "email_redirect_to": "http://localhost:3000/login",
             "data": {
                 "full_name": full_name
             }
         }
     })
-
-
-def upsert_user_account(user_id: str, email: str, full_name: str):
-    """
-    Upserts a user profile record into the public user_account table.
-
-    Args:
-        user_id (str): The unique user ID from Supabase Auth.
-        email (str): The user's email address.
-        full_name (str): The user's full name.
-
-    Returns:
-        Any: The database query response object.
-    """
-    return supabase.table("user_account").upsert({
-        "id": user_id,
-        "email": email,
-        "full_name": full_name
-    }, on_conflict="id").execute()
 
 
 def auth_sign_in(email: str, password: str):

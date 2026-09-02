@@ -16,17 +16,20 @@ def register_user_endpoint(payload: UserRegisterRequest):
     and returns the session access token for immediate frontend use.
     """
     result = AuthService.register_user(payload)
+    user_data = result.get("user", {})
+    
     return {
         "success": True,
         "message": result["message"],
+        "requires_confirmation": result.get("requires_confirmation", False),
         "data": {
-            "user_id": result["user_id"],
-            "email": result["email"],
-            "full_name": result["full_name"],
-            "access_token": result["access_token"]
+            "user_id": user_data.get("id"),
+            "email": user_data.get("email"),
+            "full_name": user_data.get("full_name"),
+            "access_token": result.get("access_token")
         }
     }
-
+    
 @router.post("/login", status_code=status.HTTP_200_OK)
 def login_user_endpoint(payload: UserLoginRequest):
     """

@@ -21,36 +21,44 @@ class AuthService:
     credentials and internal application profile records through repository adapters.
     """
 
-    @staticmethod
-    def register_user(cls, email: str, password: str, full_name: str | None = None) -> dict:
+    from src.integrations import auth_repository
+from fastapi import HTTPException, status
+
+class AuthService:
+
+    @classmethod
+    def register_user(cls, payload: UserRegisterRequest) -> dict:
         """
         Registers a new user via Supabase Auth, provisions their profile metadata, 
         and explicitly syncs an entry into the public `user_account` database table.
 
         Args:
             payload (UserRegisterRequest): The registration request payload containing email, password, and full name.
-
-        Returns:
-            dict: A dictionary containing the new user ID, email, full name, access token, and status message.
-
-        Raises:
-            HTTPException (500): If Supabase auth registration fails or database synchronization errors occur.
-            HTTPException (400): If user creation returns an empty response (e.g., email already in use).
         """
+        email = payload.email
+        password = payload.password
+        full_name = payload.full_name
+
         try:
-            response = supabase.auth.sign_up({
-                "email": email,
-                "password": password,
-                "options": {
-                    "data": {
-                        "full_name": full_name
-                    }
-                }
-            })
+            # 1. Delegate auth registration to the repository layer
+            response = auth_repository.auth_sign_up(
+                email=email,
+                password=password,
+                full_name=full_name
+            )
             
             user = getattr(response, "user", None)
             session = getattr(response, "session", None)
 
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Registration failed. User object not returned."
+                )
+
+            user_id = str(user.id)
+
+            
             # Edge Case 2: Email confirmation enabled -> session is None
             if not session:
                 logger.info(f"Registration successful for {email}. Email confirmation pending.")
@@ -60,7 +68,7 @@ class AuthService:
                     "requires_confirmation": True,
                     "access_token": None,
                     "user": {
-                        "id": getattr(user, "id", None),
+                        "id": user_id,
                         "email": email,
                         "full_name": full_name
                     }
@@ -75,7 +83,7 @@ class AuthService:
                 "access_token": session.access_token,
                 "refresh_token": session.refresh_token,
                 "user": {
-                    "id": getattr(user, "id", None),
+                    "id": user_id,
                     "email": email,
                     "full_name": full_name
                 }
@@ -92,12 +100,16 @@ class AuthService:
                     detail="This email is already registered. Please sign in or use a different email address."
                 )
             
+            # If it's already an HTTPException, re-raise it directly
+            if isinstance(e, HTTPException):
+                raise e
+
             logger.error(f"Unexpected Supabase auth registration error for {email}: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Supabase auth registration failed: {str(e)}"
             )
-
+            
     @staticmethod
     def login_user(payload: UserLoginRequest) -> dict:
         """
