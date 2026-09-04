@@ -7,8 +7,8 @@ from sqlalchemy import select
 
 from src.core.celery_app import celery_app
 from src.db.session import SessionLocal
-from src.db.models.media_asset import MediaAsset
-from src.db.models.transcript import Transcript
+from src.schemas.media import MediaAsset
+from src.schemas.transcript import Transcript
 from src.integrations import assemblyai
 from src.integrations import storage_adapter as storage_service
 
