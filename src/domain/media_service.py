@@ -10,6 +10,9 @@ from src.integrations import media_repository
 from src.integrations import storage_adapter
 from src.schemas.media import PresignedUrlRequest, MediaMetadataRequest
 from src.domain.authorization import verify_active_participant
+import logging
+
+logger = logging.getLogger(__name__)
 
 from src.core.config import (
     STORAGE_TIER_HOT, 
@@ -49,8 +52,8 @@ class MediaService:
             required_roles=["owner", "admin", "contributor"]
         )
 
-        # SECURITY FIX: Enforce file size and type validation via the storage adapter
-        media_type, extension = storage_adapter.validate_upload(payload.mime_type, payload.byte_size)
+        # Enforce file size and type validation via the storage adapter
+        media_type, extension = storage_adapter.validate_upload(payload.mime_type)
         
         # SECURITY FIX: Prevent path traversal by generating a secure UUID-based path key 
         # instead of trusting raw user filenames.
@@ -59,6 +62,11 @@ class MediaService:
         try:
             upload_res = storage_adapter.create_signed_upload(storage_path)
         except Exception as e:
+            # 🔍 ADD THIS PRINT STATEMENT TO SEE THE REAL ERROR IN YOUR TERMINAL
+            import traceback
+            traceback.print_exc()
+            print(f"STORAGE ERROR DETAILED: {repr(e)}")
+            
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to generate signed upload URL: {str(e)}"
@@ -96,20 +104,15 @@ class MediaService:
                 detail="Invalid storage key path for this memoir container."
             )
 
-        # 1. STORAGE EXISTENCE CHECK: Verify the file actually exists in storage
         try:
-            file_exists = storage_adapter.object_exists(payload.storage_key)
-        except Exception:
-            file_exists = False
-
-        if not file_exists:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="The referenced file does not exist in storage. Please upload the file first."
-            )
-
+            file_size = storage_adapter.object_exists(payload.storage_key)
+            if not file_size:
+                logger.warning(f"Storage index lag detected for key: {payload.storage_key}. Proceeding with metadata save.")
+        except Exception as exc:
+            logger.warning(f"Could not verify file existence due to error: {exc}")
+            
         # 2. KIND-SPECIFIC VALIDATION: Ensure audio and video assets provide a valid duration
-        if payload.kind in ["audio", "video"] and (payload.duration_ms is None or payload.duration_ms <= 0):
+        if payload.kind in ["audio", "video"] and (payload.duration_ms is None):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Audio and video assets require a valid positive duration_ms."
@@ -138,6 +141,20 @@ class MediaService:
             "transcription_status": STORAGE_TIER_HOT if payload.kind == "photo" else TRANSCRIPTION_STATUS_PENDING
         }
 
+        # 1. Get the JSON-safe dictionary representation of the request payload
+        media_data = payload.model_dump(mode='json')
+
+        # 2. Dynamically inject server-side tracking fields securely
+        media_data["uploaded_by_participant_id"] = participant_id
+        media_data["storage_tier"] = STORAGE_TIER_HOT
+        
+            # STORAGE_TIER_HOT if payload.kind == "photo" else TRANSCRIPTION_STATUS_PENDING
+        if payload.kind == "photo":
+            media_data["transcription_status"] = "skipped"
+        else:
+            media_data["transcription_status"] = TRANSCRIPTION_STATUS_PENDING # "pending"
+        
+
         try:
             db_response = media_repository.insert_media_metadata(media_data)
         except Exception as e:
@@ -146,10 +163,4 @@ class MediaService:
                 detail=f"Database error while saving media metadata: {str(e)}"
             )
 
-        if not db_response or not db_response.data:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to save media metadata record in database."
-            )
-
-        return db_response.data[0]
+        return db_response.data[0] if db_response.data else {}

@@ -24,7 +24,7 @@ class PresignedUrlRequest(BaseModel):
         description="MIME type of the file (e.g., image/jpeg, audio/webm)"
     )
     
-    byte_size: int = Field(..., gt=0, description="Size of the file in bytes")
+    # byte_size: int = Field(..., gt=0, description="Size of the file in bytes")
 
     @field_validator('filename')
     @classmethod

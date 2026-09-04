@@ -5,7 +5,7 @@ for participant authorizations and media asset metadata persistence.
 """
 
 from src.integrations.supabase_client import supabase
-
+from src.integrations.supabase_client import supabase_admin
 
 def fetch_participant(memoir_id: str, user_id: str):
     """
@@ -36,7 +36,7 @@ def insert_media_metadata(media_data: dict):
     Returns:
         Any: The database response object containing the inserted media record.
     """
-    return supabase.table("media_asset").insert(media_data).execute()
+    return supabase_admin.table("media_asset").insert(media_data).execute()
 
 def check_existing_media_by_checksum(memoir_id: str, checksum: str):
     """

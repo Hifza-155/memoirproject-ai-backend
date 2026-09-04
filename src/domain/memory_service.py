@@ -44,7 +44,7 @@ class MemoryService:
         # Timeline Date: Pass through exactly what the user sent without inventing defaults
         memory_data = {
             "memoir_id": str(payload.memoir_id),
-            "author_participant_id": participant_id,  # <-- Keep this (links via participant table)
+            "author_participant_id": participant_id, 
             "title": payload.title,
             "body_text": payload.body_text,
             "status": payload.status,
@@ -85,13 +85,14 @@ class MemoryService:
                 )
 
             link_records = [
-                {
-                    "memory_id": memory_id,
-                    "media_asset_id": media_id,
-                    "memoir_id": payload.memoir_id
-                }
-                for media_id in payload.media_asset_ids
+            {
+                "memory_id": str(memory_id),         
+                "media_asset_id": str(media_id),     
+                "memoir_id": str(payload.memoir_id) 
+            }
+            for media_id in payload.media_asset_ids
             ]
+            
             try:
                 memory_repository.insert_memory_media(link_records)
             except Exception as e:
