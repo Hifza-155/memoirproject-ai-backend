@@ -23,6 +23,7 @@ from src.api.memoir import router as memoir_router
 from src.api.memory import router as memory_router
 from src.api.auth import router as auth_router
 from src.api.comments import router as comment_router
+from src.api.search import router as search_router
 
 
 def setup_logging():
@@ -86,3 +87,4 @@ app.include_router(memoir_router)
 app.include_router(memory_router)
 app.include_router(media_router)
 app.include_router(comment_router)
+app.include_router(search_router)
