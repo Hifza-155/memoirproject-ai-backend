@@ -10,6 +10,8 @@ from src.schemas.memory import MemoryCreateRequest
 from src.integrations import memory_repository
 from src.domain.authorization import verify_active_participant
 from src.integrations import storage_adapter
+from src.domain.transcription_service import transcribe_and_store_audio  # <-- Import transcription service
+from src.integrations.supabase_client import supabase  # <-- Required for querying transcript table directly if needed
 
 class MemoryService:
     """
@@ -22,25 +24,14 @@ class MemoryService:
         """
         Validates participant permissions, normalizes timeline and date parameters, 
         persists the new memory entry, and maps any attached media asset IDs.
-
-        Args:
-            payload (MemoryCreateRequest): The validated memory creation payload.
-            user_session (dict): The active user session dictionary containing the user ID.
-
-        Returns:
-            dict: The newly created memory database record.
-
-        Raises:
-            HTTPException (500): If database insertion or media linking fails.
         """
         participant = verify_active_participant(
-        str(payload.memoir_id), 
-        user_id, 
-        required_roles=["owner", "admin", "contributor"]
+            str(payload.memoir_id), 
+            user_id, 
+            required_roles=["owner", "admin", "contributor"]
         )
         participant_id = participant["id"]
 
-        # Timeline Date: Pass through exactly what the user sent without inventing defaults
         # Timeline Date: Pass through exactly what the user sent without inventing defaults
         memory_data = {
             "memoir_id": str(payload.memoir_id),
@@ -73,7 +64,8 @@ class MemoryService:
 
         # Associate attached media assets via the junction table with ownership verification
         if payload.media_asset_ids:
-            # SECURITY FIX: Ensure all media assets belong to this memoir (Flag 3)
+            print(f"DEBUG: Found media_asset_ids in payload: {payload.media_asset_ids}")
+            
             owned_assets = memory_repository.verify_media_assets_belong_to_memoir(
                 payload.memoir_id, payload.media_asset_ids
             )
@@ -86,8 +78,8 @@ class MemoryService:
 
             link_records = [
             {
-                "memory_id": str(memory_id),         
-                "media_asset_id": str(media_id),     
+                "memory_id": str(memory_id),        
+                "media_asset_id": str(media_id),    
                 "memoir_id": str(payload.memoir_id) 
             }
             for media_id in payload.media_asset_ids
@@ -99,14 +91,46 @@ class MemoryService:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Failed to link media assets to memory: {str(e)}"
-                )            
+                )
+
+            # =========================================================================
+            # INTEGRATION POINT: Trigger AssemblyAI Transcription for newly attached audio
+            # =========================================================================
+            for media_id in payload.media_asset_ids:
+                print(f"DEBUG: Checking media_id {media_id} for transcription trigger...")
+                
+                # Fetch asset record securely via the repository
+                asset_record = memory_repository.fetch_media_asset_record(str(media_id))
+                
+                print(f"DEBUG: Fetched asset record from DB: {asset_record}")
+
+                if asset_record and asset_record.get("kind") == "audio":
+                    storage_key = asset_record.get("storage_key")
+                    print(f"DEBUG: Audio asset matched! Storage key found: {storage_key}")
+                    
+                    if storage_key:
+                        try:
+                            print(f"DEBUG: Invoking transcribe_and_store_audio for asset {media_id}...")
+                            transcribe_and_store_audio(
+                                media_asset_id=str(media_id),
+                                memoir_id=str(payload.memoir_id),
+                                storage_key=storage_key
+                            )
+                            print(f"DEBUG: Transcription task processed successfully for {media_id}")
+                        except Exception as trig_err:
+                            print(f"ERROR: Failed to trigger transcription: {str(trig_err)}")
+                    else:
+                        print(f"ERROR: Audio asset {media_id} has a missing storage_key!")
+                else:
+                    asset_kind = asset_record.get('kind') if asset_record else 'Not Found'
+                    print(f"DEBUG: Asset {media_id} skipped (Kind: {asset_kind})")
         return new_memory
     
     @classmethod
     def get_memoir_feed(cls, memoir_id: str, user_id: str, limit: int = 20, offset: int = 0) -> list:
         """
         Retrieves a paginated memoir memory feed for an active participant, 
-        hydrating all attached media assets with secure signed playback URLs.
+        hydrating all attached media assets with secure signed playback URLs and AI transcripts.
         """
         # 1. Enforce active participant check
         verify_active_participant(str(memoir_id), str(user_id))
@@ -122,7 +146,7 @@ class MemoryService:
 
         memories = res.data if res and res.data else []
 
-        # 3. Hydrate media assets with secure playback URLs
+        # 3. Hydrate media assets with secure playback URLs and transcript records
         hydrated_memories = []
         for mem in memories:
             media_list = []
@@ -139,6 +163,20 @@ class MemoryService:
                             playback_url = None
                     
                     asset["playback_url"] = playback_url
+
+                    # =========================================================================
+                    # INTEGRATION POINT: Hydrate transcript data if the media asset is audio
+                    # =========================================================================
+                    if asset.get("kind") == "audio":
+                        asset_id = asset.get("id")
+                        try:
+                            transcript_res = supabase.table("transcript").select("*").eq("media_asset_id", asset_id).maybe_single().execute()
+                            asset["transcript"] = transcript_res.data if transcript_res and transcript_res.data else None
+                        except Exception:
+                            asset["transcript"] = None
+                    else:
+                        asset["transcript"] = None
+
                     media_list.append(asset)
             
             mem["media_assets"] = media_list
@@ -152,7 +190,6 @@ class MemoryService:
         Safely soft-deletes a memory record after confirming the user is either 
         the memory's author or a memoir owner/admin.
         """
-        # 1. Fetch participant details to check their role in this memoir
         participant_res = memory_repository.fetch_participant(memoir_id, user_id)
         if not participant_res.data:
             raise HTTPException(
@@ -161,10 +198,9 @@ class MemoryService:
             )
         
         participant = participant_res.data[0]
-        user_role = participant.get("role")  # e.g., 'owner', 'admin', 'contributor', 'viewer'
+        user_role = participant.get("role") 
         participant_id = participant.get("id")
 
-        # 2. Fetch target memory strictly scoped to this memoir
         try:
             mem_res = memory_repository.fetch_memory_by_id(memory_id, memoir_id)
         except Exception as e:
@@ -175,7 +211,6 @@ class MemoryService:
 
         memory = mem_res.data[0]
 
-        # 3. SECURITY CHECK: Restrict deletion to Memoir Owners/Admins OR the Memory Author
         is_owner_or_admin = user_role in ["owner", "admin"]
         is_author = (
             memory.get("author_user_id") == user_id or 
@@ -194,7 +229,6 @@ class MemoryService:
                 detail="Cannot delete a saved/finalized memory."
             )
 
-        # 4. Perform soft-delete (reversible, matching feed filter .is_('deleted_at', 'null'))
         try:
             memory_repository.soft_delete_memory_record(memory_id, memoir_id)
         except Exception as e:
