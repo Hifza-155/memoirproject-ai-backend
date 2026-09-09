@@ -1,12 +1,8 @@
-"""
-@file transcription_service.py
-@description Handles communication with AssemblyAI using direct binary stream uploading 
-from Supabase storage with admin privileges and retry logic for race conditions.
-"""
-
 import os
 import time
 import assemblyai as aai
+# Add this import at the top:
+from src.integrations.memory_repository import upsert_transcript_record
 from src.integrations.supabase_client import supabase_admin
 
 def transcribe_and_store_audio(media_asset_id: str, memoir_id: str, storage_key: str):
@@ -62,8 +58,8 @@ def transcribe_and_store_audio(media_asset_id: str, memoir_id: str, storage_key:
             "confidence": transcript_result.confidence,
             "language": transcript_result.language_code or "en"
         }
-
-        response = supabase_admin.table("transcript").upsert(transcript_payload).execute()
+        response = upsert_transcript_record(transcript_payload)
+        
         print("Transcript successfully saved to database!", response.data)
         return response.data
 

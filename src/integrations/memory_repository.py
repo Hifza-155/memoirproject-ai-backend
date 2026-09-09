@@ -107,3 +107,10 @@ def fetch_media_asset_record(media_asset_id: str):
         .maybe_single() \
         .execute()
     return res.data if res else None
+
+def upsert_transcript_record(transcript_payload: dict):
+    """
+    Saves or updates the AI transcript in the database, 
+    keeping DB operations isolated from integration logic.
+    """
+    return supabase_admin.table("transcript").upsert(transcript_payload).execute()
