@@ -1,82 +1,72 @@
-import logging
-import uuid
-from datetime import datetime, timezone
+"""
+@file transcription_service.py
+@description Handles communication with AssemblyAI using direct binary stream uploading 
+from Supabase storage with admin privileges and retry logic for race conditions.
+"""
 
-from fastapi import HTTPException, status
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+import os
+import time
+import assemblyai as aai
+from src.integrations.supabase_client import supabase_admin
 
-from src.schemas.media import MediaAsset
-from src.schemas.memoir import Memoir
-from src.schemas.transcript import Transcript
-from src.schemas.media import TranscriptUpdate
+def transcribe_and_store_audio(media_asset_id: str, memoir_id: str, storage_key: str):
+    """
+    Downloads audio binary from Supabase storage using admin client with retries, 
+    uploads raw bytes directly to AssemblyAI, and persists the resulting transcript.
+    """
+    api_key = os.getenv("ASSEMBLYAI_API_KEY")
+    if not api_key:
+        print("CRITICAL ERROR: ASSEMBLYAI_API_KEY is missing from environment variables!")
+        raise ValueError("ASSEMBLYAI_API_KEY is missing")
 
-logger = logging.getLogger(__name__)
+    aai.settings.api_key = api_key
+    transcriber = aai.Transcriber()
 
-
-def get_transcript(db: Session, media_asset_id: uuid.UUID, user_id: uuid.UUID) -> Transcript:
-    stmt = (
-        select(Transcript)
-        .join(MediaAsset, Transcript.media_asset_id == MediaAsset.id)
-        .join(Memoir, MediaAsset.memoir_id == Memoir.id)
-        .where(
-            Transcript.media_asset_id == media_asset_id,
-            MediaAsset.deleted_at.is_(None),
-            Memoir.owner_user_id == user_id,
-            Memoir.deleted_at.is_(None),
-        )
-    )
-    transcript = db.execute(stmt).scalar_one_or_none()
-    if transcript is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transcript not found")
-    return transcript
-
-
-def _load_owned_transcript(db: Session, transcript_id: uuid.UUID, user_id: uuid.UUID) -> Transcript:
-    stmt = (
-        select(Transcript)
-        .join(MediaAsset, Transcript.media_asset_id == MediaAsset.id)
-        .join(Memoir, MediaAsset.memoir_id == Memoir.id)
-        .where(
-            Transcript.id == transcript_id,
-            MediaAsset.deleted_at.is_(None),
-            Memoir.owner_user_id == user_id,
-            Memoir.deleted_at.is_(None),
-        )
-    )
-    transcript = db.execute(stmt).scalar_one_or_none()
-    if transcript is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transcript not found")
-    return transcript
-
-
-def update_transcript(db: Session, *, transcript_id: uuid.UUID, user_id: uuid.UUID, data: TranscriptUpdate) -> Transcript:
-    transcript = _load_owned_transcript(db, transcript_id, user_id)
-    transcript.text = data.text
-    transcript.edited_at = datetime.now(timezone.utc)
-    db.commit()
-    db.refresh(transcript)
-    logger.info("Transcript edited id=%s", transcript.id)
-    return transcript
-
-
-def retry_transcript(db: Session, *, transcript_id: uuid.UUID, user_id: uuid.UUID) -> Transcript:
-    transcript = _load_owned_transcript(db, transcript_id, user_id)
-    if transcript.status != "failed":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Only a failed transcription can be retried.",
-        )
-
-    transcript.status = "queued"
-    transcript.error_message = None
-    db.commit()
-
-    from src.domain.transcription_tasks import transcribe_asset
     try:
-        transcribe_asset.delay(str(transcript.media_asset_id))
-    except Exception as exc:
-        logger.error("Failed to enqueue transcription retry transcript_id=%s: %s", transcript.id, exc)
+        bucket_name = "media-bucket"  
+        audio_bytes = None
+        
+        # Retry loop (up to 3 attempts with a 1.5s delay) to handle browser upload race conditions
+        print(f"Attempting to download storage key '{storage_key}' from bucket '{bucket_name}'...")
+        for attempt in range(1, 4):
+            try:
+                audio_bytes = supabase_admin.storage.from_(bucket_name).download(storage_key)
+                if audio_bytes:
+                    print(f"Successfully downloaded audio bytes on attempt {attempt}")
+                    break
+            except Exception as dl_err:
+                print(f"Download attempt {attempt} failed (file might still be uploading): {str(dl_err)}")
+                if attempt < 3:
+                    time.sleep(1.5)
 
-    logger.info("Transcript retry queued id=%s", transcript.id)
-    return transcript
+        if not audio_bytes:
+            raise Exception(f"Download returned empty bytes or 404 after retries for key: {storage_key}")
+
+        print("Uploading raw audio bytes to AssemblyAI...")
+        upload_url = transcriber.upload_file(audio_bytes)
+
+        print(f"Uploaded successfully. Transcribing URL...")
+        transcript_result = transcriber.transcribe(upload_url)
+        
+        if transcript_result.status == aai.TranscriptStatus.error:
+            raise Exception(f"AssemblyAI processing failed: {transcript_result.error}")
+
+        raw_text = transcript_result.text or ""
+        print(f"Transcription successful! Text: {raw_text[:60]}...")
+
+        transcript_payload = {
+            "media_asset_id": media_asset_id,
+            "memoir_id": memoir_id,
+            "raw_text": raw_text,
+            "engine": "assemblyai",
+            "confidence": transcript_result.confidence,
+            "language": transcript_result.language_code or "en"
+        }
+
+        response = supabase_admin.table("transcript").upsert(transcript_payload).execute()
+        print("Transcript successfully saved to database!", response.data)
+        return response.data
+
+    except Exception as e:
+        print(f"CRITICAL TRANSCRIPTION EXCEPTION CAUGHT: {str(e)}")
+        raise e

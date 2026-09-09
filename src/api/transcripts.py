@@ -1,48 +1,32 @@
-import uuid
+"""
+@file transcript.py
+@description FastAPI router exposing endpoints to request background transcriptions.
+"""
 
-from fastapi import APIRouter, Depends, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
+from src.schemas.transcript import TranscriptionRequest
+from src.domain.transcription_service import transcribe_and_store_audio
 
-from src.domain.authorization import CurrentUser, get_current_user
-from src.db.session import get_db
-# Adjust this schema import path depending on where your Transcript schemas are defined
-from src.schemas.media import TranscriptRead, TranscriptUpdate 
-from src.domain import transcription_service
+router = APIRouter(prefix="/api/transcript", tags=["Transcript"])
 
-router = APIRouter(tags=["transcripts"])
-
-
-@router.get("/media/{media_asset_id}/transcript", response_model=TranscriptRead)
-def get_transcript(
-    media_asset_id: uuid.UUID,
-    current: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db),
+@router.post("/", status_code=status.HTTP_202_ACCEPTED)
+async def request_transcription(
+    payload: TranscriptionRequest,
+    background_tasks: BackgroundTasks
 ):
-    return transcription_service.get_transcript(db, media_asset_id, current.user.id)
-
-
-@router.patch("/transcripts/{transcript_id}", response_model=TranscriptRead)
-def update_transcript(
-    transcript_id: uuid.UUID,
-    payload: TranscriptUpdate,
-    current: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    return transcription_service.update_transcript(
-        db, transcript_id=transcript_id, user_id=current.user.id, data=payload
-    )
-
-
-@router.post(
-    "/transcripts/{transcript_id}/retry",
-    response_model=TranscriptRead,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-def retry_transcript(
-    transcript_id: uuid.UUID,
-    current: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    return transcription_service.retry_transcript(
-        db, transcript_id=transcript_id, user_id=current.user.id
-    )
+    """
+    Triggers AssemblyAI speech-to-text conversion in the background for a given media asset.
+    """
+    try:
+        background_tasks.add_task(
+            transcribe_and_store_audio,
+            media_asset_id=payload.media_asset_id,
+            memoir_id=payload.memoir_id,
+            storage_key=payload.storage_key
+        )
+        return {"status": "processing", "message": "Transcription task initiated in background."}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to queue transcription task: {str(e)}"
+        )
