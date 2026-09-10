@@ -96,3 +96,21 @@ def soft_delete_memory_record(memory_id: str, memoir_id: str):
         .eq("id", memory_id) \
         .eq("memoir_id", memoir_id) \
         .execute()
+
+def fetch_media_asset_record(media_asset_id: str):
+    """
+    Fetches the full media asset record (including storage_key and kind) by its ID.
+    """
+    res = supabase_admin.table("media_asset") \
+        .select("*") \
+        .eq("id", media_asset_id) \
+        .maybe_single() \
+        .execute()
+    return res.data if res else None
+
+def upsert_transcript_record(transcript_payload: dict):
+    """
+    Saves or updates the AI transcript in the database, 
+    keeping DB operations isolated from integration logic.
+    """
+    return supabase_admin.table("transcript").upsert(transcript_payload).execute()

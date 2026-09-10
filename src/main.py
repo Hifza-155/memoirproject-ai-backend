@@ -9,6 +9,7 @@ import logging
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from src.core.config import settings
+from src.api.share import owner_router, reader_router
 
 # CRITICAL: load_dotenv() must be called BEFORE any other application modules 
 # are imported so database and storage configurations can read environment variables.
@@ -22,7 +23,10 @@ from src.api.media import router as media_router
 from src.api.memoir import router as memoir_router
 from src.api.memory import router as memory_router
 from src.api.auth import router as auth_router
-
+from src.api.comments import router as comment_router
+from src.api.search import router as search_router
+from src.api.export import router as export_router
+from src.api.transcripts import router as transcript_router
 
 def setup_logging():
     """Configures root logging format and log level for backend services."""
@@ -84,3 +88,9 @@ app.include_router(auth_router)
 app.include_router(memoir_router)
 app.include_router(memory_router)
 app.include_router(media_router)
+app.include_router(comment_router)
+app.include_router(search_router)
+app.include_router(export_router)
+app.include_router(transcript_router)
+app.include_router(owner_router)
+app.include_router(reader_router)

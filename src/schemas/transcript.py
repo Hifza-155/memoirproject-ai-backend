@@ -1,25 +1,11 @@
-import uuid
-from datetime import datetime
+"""
+@file transcript.py
+@description Pydantic schemas for audio transcription validation and requests.
+"""
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
-
-class TranscriptRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: uuid.UUID
-    media_asset_id: uuid.UUID
-    status: str
-    text: str | None
-    language: str | None
-    confidence: float | None
-    error_message: str | None
-    attempt_count: int
-    edited_at: datetime | None
-    created_at: datetime
-
-
-class TranscriptUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    text: str = Field(min_length=1, max_length=50_000)
+class TranscriptionRequest(BaseModel):
+    media_asset_id: str = Field(..., description="The UUID of the audio media asset")
+    memoir_id: str = Field(..., description="The UUID of the memoir container")
+    storage_key: str = Field(..., description="The storage path key inside the Supabase bucket")

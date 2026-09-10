@@ -46,33 +46,21 @@ class SignedUpload:
     token: str
 
 
-def validate_upload(mime_type: str, byte_size: int) -> tuple[str, str]:
+def validate_upload(mime_type: str) -> tuple[str, str]:
     """
-    Validates file MIME types against the permitted allowlist and ensures 
-    file sizes do not exceed configured limits before any bytes are transferred.
+    Validates file MIME types against the permitted allowlist 
+    before any bytes are transferred.
 
     Args:
         mime_type (str): The MIME type of the incoming file.
-        byte_size (int): The total size of the file in bytes.
 
     Returns:
         tuple[str, str]: A tuple containing the mapped media type and file extension.
-
-    Raises:
-        HTTPException (415): If the file type is unsupported.
-        HTTPException (413): If the file size exceeds the maximum limit.
     """
     if mime_type not in ALLOWED_MIME:
         raise HTTPException(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
             detail="That file type isn't supported. Try a photo or a voice recording.",
-        )
-
-    if byte_size <= 0 or byte_size > settings.media_max_bytes:
-        limit_mb = settings.media_max_bytes // 1_048_576
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"That file is too large. The limit is {limit_mb} MB.",
         )
 
     return ALLOWED_MIME[mime_type]
