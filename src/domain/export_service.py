@@ -42,14 +42,19 @@ class ExportService:
         }
 
     @classmethod
-    def process_export_background(cls, export_id: str, memoir_id: str) -> None:
+    def process_export_background(
+        cls,
+        export_id: str,
+        memoir_id: str
+    ) -> None:
         """
         Background worker method to compile memoir data, generate the PDF,
         upload it to storage, and update the export job status.
         """
         try:
-            # 1. Fetch structured memoir payload.
-            payload = ExportRepository.fetch_memoir_export_payload(memoir_id)
+            payload = ExportRepository.fetch_memoir_export_payload(
+                memoir_id
+            )
 
             memoir = payload["memoir"]
             participants = payload["participants"]
@@ -58,7 +63,6 @@ class ExportService:
             media_assets = payload["media_assets"]
             transcripts = payload["transcripts"]
 
-            # 2. Build the memoir HTML.
             html_content = cls._render_memoir_html(
                 memoir=memoir,
                 participants=participants,
@@ -68,7 +72,6 @@ class ExportService:
                 transcripts=transcripts,
             )
 
-            # 3. Compile HTML to PDF bytes using the existing xhtml2pdf flow.
             pdf_buffer = io.BytesIO()
 
             pisa_status = pisa.CreatePDF(
@@ -83,7 +86,6 @@ class ExportService:
 
             pdf_bytes = pdf_buffer.getvalue()
 
-            # 4. Upload generated PDF to existing Supabase Storage flow.
             storage_key = (
                 f"exports/pdf-archives/{memoir_id}/{export_id}.pdf"
             )
@@ -93,7 +95,6 @@ class ExportService:
                 pdf_bytes
             )
 
-            # 5. Mark export job as ready.
             ExportRepository.update_job_status(
                 export_id=export_id,
                 status="ready",
@@ -127,6 +128,11 @@ class ExportService:
         4. Voice Memories
         5. Media Memories
         6. Ending page
+
+        A memory without media is treated as a written memory.
+        A memory with audio is rendered in the voice section.
+        A memory with photo/video is rendered in the media section.
+        Media memories are not duplicated as written-memory pages.
         """
 
         # ---------------------------------------------------------
@@ -172,21 +178,22 @@ class ExportService:
 
             return ""
 
-        # Map media asset IDs to their database records.
+        # ---------------------------------------------------------
+        # Build media relationships
+        # ---------------------------------------------------------
+
         media_by_id = {
             media.get("id"): media
             for media in media_assets
             if media.get("id")
         }
 
-        # Map transcript media IDs to transcript records.
         transcript_by_media_id = {
             transcript.get("media_asset_id"): transcript
             for transcript in transcripts
             if transcript.get("media_asset_id")
         }
 
-        # Map each memory to its related media.
         media_by_memory_id = {}
 
         for relation in memory_media:
@@ -201,7 +208,10 @@ class ExportService:
             if not media:
                 continue
 
-            media_by_memory_id.setdefault(memory_id, []).append(media)
+            media_by_memory_id.setdefault(
+                memory_id,
+                []
+            ).append(media)
 
         # ---------------------------------------------------------
         # Memoir metadata
@@ -233,14 +243,65 @@ class ExportService:
                 years = f"{birth_year} — {death_year}"
 
         # ---------------------------------------------------------
+        # Classify memories
+        # ---------------------------------------------------------
+
+        written_memories = []
+        voice_memories = []
+        media_memories = []
+
+        for memory in memories:
+            related_media = media_by_memory_id.get(
+                memory.get("id"),
+                []
+            )
+
+            has_audio = any(
+                media.get("kind") == "audio"
+                for media in related_media
+            )
+
+            has_visual_media = any(
+                media.get("kind") in ["photo", "video"]
+                for media in related_media
+            )
+
+            if has_audio:
+                voice_memories.append(memory)
+
+            if has_visual_media:
+                media_memories.append(memory)
+
+            if not related_media:
+                written_memories.append(memory)
+
+        # ---------------------------------------------------------
+        # Shared contributor helper
+        # ---------------------------------------------------------
+
+        def contributor_line_for(memory: dict) -> str:
+            author_id = memory.get("author_participant_id")
+
+            author_name = safe(
+                participant_name(author_id)
+            )
+
+            relationship = safe(
+                participant_relationship(author_id)
+            )
+
+            if relationship:
+                return f"{author_name} · {relationship}"
+
+            return author_name
+
+        # ---------------------------------------------------------
         # Written memory pages
         # ---------------------------------------------------------
 
         written_memory_pages = ""
 
-        for memory in memories:
-            memory_id = memory.get("id")
-
+        for memory in written_memories:
             title = safe(
                 memory.get("title")
                 or "A Memory"
@@ -256,20 +317,7 @@ class ExportService:
                 or memory.get("created_at")
             )
 
-            author_id = memory.get("author_participant_id")
-
-            author_name = safe(
-                participant_name(author_id)
-            )
-
-            relationship = safe(
-                participant_relationship(author_id)
-            )
-
-            contributor_line = author_name
-
-            if relationship:
-                contributor_line += f" · {safe(relationship)}"
+            contributor_line = contributor_line_for(memory)
 
             written_memory_pages += f"""
             <div class="memory-page">
@@ -303,7 +351,7 @@ class ExportService:
 
         voice_memory_pages = ""
 
-        for memory in memories:
+        for memory in voice_memories:
             related_media = media_by_memory_id.get(
                 memory.get("id"),
                 []
@@ -314,6 +362,7 @@ class ExportService:
                     continue
 
                 media_id = media.get("id")
+
                 transcript = transcript_by_media_id.get(
                     media_id,
                     {}
@@ -325,7 +374,6 @@ class ExportService:
                 ).replace("\n", "<br />")
 
                 duration_ms = media.get("duration_ms")
-
                 duration_text = ""
 
                 if duration_ms is not None:
@@ -337,24 +385,13 @@ class ExportService:
                     except (TypeError, ValueError):
                         duration_text = ""
 
-                author_id = memory.get("author_participant_id")
-
-                author_name = safe(
-                    participant_name(author_id)
-                )
-
-                relationship = safe(
-                    participant_relationship(author_id)
-                )
-
-                contributor_line = author_name
-
-                if relationship:
-                    contributor_line += f" · {relationship}"
-
                 voice_title = safe(
                     memory.get("title")
                     or "Voice Memory"
+                )
+
+                contributor_line = contributor_line_for(
+                    memory
                 )
 
                 voice_memory_pages += f"""
@@ -420,16 +457,11 @@ class ExportService:
 
         media_memory_pages = ""
 
-        for memory in memories:
+        for memory in media_memories:
             related_media = media_by_memory_id.get(
                 memory.get("id"),
                 []
             )
-
-            if not related_media:
-                continue
-
-            memory_id = memory.get("id")
 
             title = safe(
                 memory.get("title")
@@ -441,32 +473,21 @@ class ExportService:
                 or ""
             ).replace("\n", "<br />")
 
-            author_id = memory.get("author_participant_id")
-
-            author_name = safe(
-                participant_name(author_id)
+            contributor_line = contributor_line_for(
+                memory
             )
-
-            relationship = safe(
-                participant_relationship(author_id)
-            )
-
-            contributor_line = author_name
-
-            if relationship:
-                contributor_line += f" · {relationship}"
 
             media_items_html = ""
 
             for media in related_media:
                 kind = media.get("kind")
+
                 caption = safe(
                     media.get("caption")
                     or ""
                 )
 
                 storage_key = media.get("storage_key")
-
                 playback_url = None
 
                 if storage_key:
@@ -474,7 +495,6 @@ class ExportService:
                         storage_key
                     )
 
-                # Photos can be rendered directly in the PDF.
                 if kind == "photo" and playback_url:
                     media_items_html += f"""
                     <div class="media-item">
@@ -496,8 +516,6 @@ class ExportService:
                     </div>
                     """
 
-                # Videos cannot be played/rendered by xhtml2pdf.
-                # Represent them as a designed video-memory card.
                 elif kind == "video":
                     filename = safe(
                         media.get("original_filename")
@@ -565,26 +583,7 @@ class ExportService:
             """
 
         # ---------------------------------------------------------
-        # Table of contents
-        # ---------------------------------------------------------
-
-        toc_items = ""
-
-        for index, memory in enumerate(memories, start=1):
-            title = safe(
-                memory.get("title")
-                or "A Memory"
-            )
-
-            toc_items += f"""
-            <div class="toc-item">
-                <span>{index:02d}</span>
-                <span>{title}</span>
-            </div>
-            """
-
-        # ---------------------------------------------------------
-        # Empty-state content
+        # Empty states
         # ---------------------------------------------------------
 
         if not written_memory_pages:
@@ -623,6 +622,40 @@ class ExportService:
                 <p>
                     No media memories were included in this collection.
                 </p>
+            </div>
+            """
+
+        # ---------------------------------------------------------
+        # Table of contents
+        # ---------------------------------------------------------
+
+        toc_items = ""
+
+        for index, memory in enumerate(memories, start=1):
+            title = safe(
+                memory.get("title")
+                or "A Memory"
+            )
+
+            related_media = media_by_memory_id.get(
+                memory.get("id"),
+                []
+            )
+
+            if not related_media:
+                section_name = "Written Memory"
+            elif any(
+                media.get("kind") == "audio"
+                for media in related_media
+            ):
+                section_name = "Voice Memory"
+            else:
+                section_name = "Media Memory"
+
+            toc_items += f"""
+            <div class="toc-item">
+                <span>{index:02d}</span>
+                <span>{title} · {section_name}</span>
             </div>
             """
 
@@ -1039,7 +1072,6 @@ class ExportService:
                 </div>
             </div>
 
-
             <!-- TABLE OF CONTENTS -->
             <div class="section-page">
 
@@ -1055,7 +1087,7 @@ class ExportService:
                 </div>
 
                 <div class="memory-label">
-                    WRITTEN MEMORIES
+                    MEMORIES
                 </div>
 
                 {toc_items}
@@ -1076,24 +1108,20 @@ class ExportService:
                         Media Memories
                     </div>
                     '''
-                    if voice_memory_pages or media_memory_pages
+                    if voice_memories or media_memories
                     else ""
                 }
 
             </div>
 
-
             <!-- WRITTEN MEMORIES -->
             {written_memory_pages}
-
 
             <!-- VOICE MEMORIES -->
             {voice_memory_pages}
 
-
             <!-- MEDIA MEMORIES -->
             {media_memory_pages}
-
 
             <!-- ENDING -->
             <div class="ending-page">
