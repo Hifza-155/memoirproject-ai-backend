@@ -9,24 +9,34 @@ from datetime import datetime, timezone
 from src.integrations.supabase_client import supabase_admin
 
 
-# Use your project's environment bucket name or fallback to media-bucket
 BUCKET_NAME = os.getenv("SUPABASE_BUCKET_NAME", "media-bucket")
 
 
 class ExportRepository:
 
     @staticmethod
-    def create_export_job(memoir_id: str, participant_id: str, kind: str = "pdf") -> dict:
+    def create_export_job(
+        memoir_id: str,
+        participant_id: str,
+        kind: str = "pdf"
+    ) -> dict:
         """Inserts a new export job with 'queued' status."""
-        response = supabase_admin.table("memoir_export").insert({
-            "memoir_id": memoir_id,
-            "requested_by_participant_id": participant_id,
-            "kind": kind,
-            "status": "queued"
-        }).execute()
+        response = (
+            supabase_admin
+            .table("memoir_export")
+            .insert({
+                "memoir_id": memoir_id,
+                "requested_by_participant_id": participant_id,
+                "kind": kind,
+                "status": "queued"
+            })
+            .execute()
+        )
 
         if not response.data:
-            raise Exception("Failed to create export job record in database.")
+            raise Exception(
+                "Failed to create export job record in database."
+            )
 
         return response.data[0]
 
@@ -57,25 +67,28 @@ class ExportRepository:
         if error_message is not None:
             update_data["error_message"] = error_message
 
-        supabase_admin.table("memoir_export").update(
-            update_data
-        ).eq("id", export_id).execute()
+        (
+            supabase_admin
+            .table("memoir_export")
+            .update(update_data)
+            .eq("id", export_id)
+            .execute()
+        )
 
     @staticmethod
     def fetch_memoir_export_payload(memoir_id: str) -> dict:
         """
-        Fetch all data required to build the memoir PDF.
+        Fetches all data required to build the memoir PDF.
 
         The export includes:
         - memoir metadata
         - memoir participants/contributors
-        - memories
+        - active memories
         - memory-to-media relationships
         - media assets
         - audio transcripts
 
-        Comments are intentionally excluded because the exported PDF
-        represents a static keepsake archive.
+        Deleted memories and comments are excluded from the export.
         """
 
         # 1. Fetch memoir metadata
@@ -88,7 +101,11 @@ class ExportRepository:
             .execute()
         )
 
-        memoir_data = memoir_res.data if memoir_res and memoir_res.data else {}
+        memoir_data = (
+            memoir_res.data
+            if memoir_res and memoir_res.data
+            else {}
+        )
 
         # 2. Fetch memoir participants/contributors
         participants_res = (
@@ -107,10 +124,10 @@ class ExportRepository:
             else []
         )
 
-        # 3. Fetch memories
+        # 3. Fetch active memories
         #
-        # author_participant_id connects each memory to the
-        # memoir_participant record that represents its contributor.
+        # Deleted memories are excluded using the same deleted_at
+        # rule used by the existing memory repository.
         memories_res = (
             supabase_admin
             .table("memory")
@@ -130,6 +147,7 @@ class ExportRepository:
                 """
             )
             .eq("memoir_id", memoir_id)
+            .is_("deleted_at", "null")
             .order("occurred_start", desc=False)
             .execute()
         )
@@ -141,9 +159,11 @@ class ExportRepository:
         )
 
         # 4. Fetch memory-to-media relationships
-        #
-        # A media asset belongs to a memory through memory_media.
-        memory_ids = [memory["id"] for memory in memories if memory.get("id")]
+        memory_ids = [
+            memory["id"]
+            for memory in memories
+            if memory.get("id")
+        ]
 
         memory_media = []
 
@@ -162,7 +182,7 @@ class ExportRepository:
                 else []
             )
 
-        # 5. Fetch media assets connected to those memories
+        # 5. Fetch media assets connected to active memories
         media_asset_ids = list({
             relation["media_asset_id"]
             for relation in memory_media
@@ -200,9 +220,6 @@ class ExportRepository:
             )
 
         # 6. Fetch transcripts for audio media
-        #
-        # Transcript text is stored in raw_text.
-        # Transcripts are linked through media_asset_id.
         audio_media_ids = [
             media["id"]
             for media in media_assets
@@ -236,7 +253,10 @@ class ExportRepository:
         }
 
     @staticmethod
-    def upload_pdf_to_storage(storage_key: str, pdf_bytes: bytes) -> None:
+    def upload_pdf_to_storage(
+        storage_key: str,
+        pdf_bytes: bytes
+    ) -> None:
         """Uploads generated PDF binary stream to Supabase Storage bucket."""
         supabase_admin.storage.from_(BUCKET_NAME).upload(
             path=storage_key,
@@ -247,15 +267,21 @@ class ExportRepository:
     @staticmethod
     def get_signed_download_url(storage_key: str) -> str:
         """Generates a secure temporary download URL for the exported PDF."""
-        res = supabase_admin.storage.from_(BUCKET_NAME).create_signed_url(
-            storage_key,
-            3600
+        res = (
+            supabase_admin
+            .storage
+            .from_(BUCKET_NAME)
+            .create_signed_url(
+                storage_key,
+                3600
+            )
         )
 
         return res.get("signedURL") or res.get("signedUrl")
 
     @staticmethod
     def get_latest_export(memoir_id: str) -> dict:
+        """Returns the latest export job for a memoir."""
         res = (
             supabase_admin
             .table("memoir_export")
