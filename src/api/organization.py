@@ -3,6 +3,7 @@ from openai import OpenAI
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from src.core.auth import get_current_user
 from src.integrations.share_repository import ShareRepository
+from src.integrations.organization_repository import fetch_archive_raw_data
 from src.domain.organization_service import perform_background_organization ,get_archive_context_for_chat
 from src.schemas.organization import (
     OrganizeResponseEnvelope,
@@ -151,7 +152,7 @@ async def chat_with_archive(
 ):
     """
     Allows the user to converse with an AI co-author that has full contextual 
-    awareness of the memoir's current chapters, titles, and memories.
+    awareness and conversational history support.
     """
     user_id = str(current_user.get("user_id") or current_user.get("id") or current_user.get("sub"))
 
@@ -163,26 +164,30 @@ async def chat_with_archive(
             detail="You do not have access to this memoir."
         )
 
-    # 1. Gather current archive context from Supabase
+    # 1. Gather optimized archive table-of-contents context
     archive_context = get_archive_context_for_chat(memoir_id)
 
     # 2. Build system instructions incorporating the archive context
     system_prompt = (
         "You are an empathetic, insightful archival co-author assisting a user with their family memoir. "
-        "You have direct access to the current state of their archive below. "
+        "You have direct access to the structured table of contents of their archive below. "
         "Use this context to answer their questions, suggest chapter improvements, or help them brainstorm ideas. "
         "Keep your tone warm, encouraging, and focused on storytelling.\n\n"
         f"{archive_context}"
     )
 
     try:
-        # Call Gemini using the model name that works for your API key
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        if payload.history:
+            for hist_item in payload.history:
+                messages.append({"role": hist_item.role, "content": hist_item.content})
+                
+        messages.append({"role": "user", "content": payload.message})
+
         response = client.chat.completions.create(
-            model="gemini-3.6-flash",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": payload.message}
-            ]
+            model="gemini-3.8-flash",
+            messages=messages
         )
 
         reply_text = response.choices[0].message.content
@@ -193,7 +198,41 @@ async def chat_with_archive(
         )
 
     except Exception as e:
+        error_str = str(e)
+        # Explicitly intercept Google AI Studio rate limits and quotas
+        if "429" in error_str or "ResourceExhausted" in error_str or "Too Many Requests" in error_str:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="You are sending messages too quickly or have exceeded your quota. Please wait 30 seconds."
+            )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"AI chat service failed: {str(e)}"
+            detail=f"AI chat service failed: {error_str}"
         )
+        
+@organization_router.get("/{memoir_id}/chapters", status_code=status.HTTP_200_OK)
+async def get_memoir_chapters(
+    memoir_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Fetches all structured chapters for a specific memoir."""
+    user_id = str(current_user.get("user_id") or current_user.get("id") or current_user.get("sub"))
+
+    participant = await ShareRepository.get_participant(memoir_id, user_id)
+    if not participant:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this memoir."
+        )
+
+    try:
+        raw_data = fetch_archive_raw_data(memoir_id)
+        chapters = raw_data.get("chapters", [])
+    except Exception:
+        chapters = []
+
+    return {
+        "success": True,
+        "message": "Chapters fetched successfully.",
+        "data": chapters
+    }

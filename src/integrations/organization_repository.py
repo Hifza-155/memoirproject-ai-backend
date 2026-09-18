@@ -32,6 +32,7 @@ def apply_ai_organization(memoir_id: str, ai_output: dict):
                 "memoir_id": memoir_id,
                 "title": chapter_data["title"],
                 "summary": chapter_data.get("summary"),
+                "narrative_prose": chapter_data.get("narrative_prose"), # Saved here
                 "sort_order": chapter_data["sort_order"],
                 "created_by": "ai",
                 "edited_by_owner": False
