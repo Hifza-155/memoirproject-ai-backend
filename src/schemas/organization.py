@@ -1,20 +1,29 @@
-from typing import List, Optional , Literal
-from pydantic import BaseModel, Field 
+from typing import List, Optional
+from pydantic import BaseModel, Field, field_validator
 class MemoryMapping(BaseModel):
     memory_id: str = Field(description="The exact UUID of the memory.")
-    inferred_date: Optional[Literal["day", "month", "year", "decade"]] = Field(
-        default=None,
-        description="The precision of the date. Must be strictly one of: 'day', 'month', 'year', or 'decade'."
+    inferred_date: Optional[str] = Field(default="day")
+    
+    # NEW: The AI rewrites the specific memory here so it flows from the previous one
+    woven_text: str = Field(
+        description="The rewritten portion of the narrative specifically corresponding to this memory's media and events. It must flow seamlessly from the previous memory's text like a continuous book."
     )
+    #Catch AI formatting errors before they crash the router
+    @field_validator("inferred_date", mode="before")
+    @classmethod
+    def sanitize_precision(cls, value: Optional[str]) -> str:
+        if not value or value not in ["day", "month", "year", "decade"]:
+            return "day"
+        return value
+
 class ChapterOutput(BaseModel):
     title: str = Field(description="A distinct, chronological title for this chapter.")
-    summary: Optional[str] = Field(default=None, description="A 1-2 sentence overview.")
-    narrative_prose: str = Field(description="A cohesive, continuous biographical narrative weaving together all memories assigned to this chapter using strictly the provided facts.")
+    # Notice we removed narrative_prose entirely!
     sort_order: int = Field(description="The chronological sequence order.")
-    memories: List[MemoryMapping] = Field(description="List of memories assigned to this chapter.")
+    memories: List[MemoryMapping] = Field(description="List of memories assigned to this chapter, in chronological order.")
+    
 class MemoirOrganizationOutput(BaseModel):
     chapters: List[ChapterOutput] = Field(description="List of chronological chapters covering all provided memories.")
-
 class OrganizeResponseEnvelope(BaseModel):
     success: bool = True
     message: str = "Organization started in the background."

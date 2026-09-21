@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
 from fastapi import HTTPException, status
+from passlib.context import CryptContext
 from src.core.config import settings
 from src.integrations.share_repository import ShareRepository
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 class ShareService:
     
@@ -33,8 +36,16 @@ class ShareService:
             raise HTTPException(status_code=404, detail="No active share link.")
 
         update_data = {}
-        if payload.expires_at is not None:
+        
+        if hasattr(payload, "expires_at") and payload.expires_at is not None:
             update_data["expires_at"] = payload.expires_at.isoformat()
+
+        # Handle password hashing if provided in payload
+        if hasattr(payload, "password") and payload.password is not None:
+            if payload.password.strip():
+                update_data["password_hash"] = pwd_context.hash(payload.password)
+            else:
+                update_data["password_hash"] = None
 
         if not update_data:
             return link

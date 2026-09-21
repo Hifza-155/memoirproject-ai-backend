@@ -27,8 +27,9 @@ class MemoryService:
         participant = verify_active_participant(
             str(payload.memoir_id), 
             user_id, 
-            required_roles=["owner", "admin", "contributor"]
+            required_roles=["owner", "co_owner", "contributor"]
         )
+        
         participant_id = participant["id"]
 
         # Timeline Date: Pass through exactly what the user sent without inventing defaults
@@ -221,12 +222,12 @@ class MemoryService:
                 detail="You do not have permission to delete this memory."
             )
 
-        if memory.get("status") == "saved":
+        if memory.get("status") == "submitted":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot delete a saved/finalized memory."
+                detail="Cannot delete a submitted/finalized memory."
             )
-
+            
         try:
             memory_repository.soft_delete_memory_record(memory_id, memoir_id)
         except Exception as e:
