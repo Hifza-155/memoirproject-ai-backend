@@ -4,17 +4,16 @@ from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from src.core.auth import get_current_user
 from src.integrations.share_repository import ShareRepository
 from src.integrations.organization_repository import fetch_archive_raw_data
-from src.domain.organization_service import perform_background_organization ,get_archive_context_for_chat
+from src.domain.organization_service import perform_background_organization, get_archive_context_for_chat
 from src.schemas.organization import (
     OrganizeResponseEnvelope,
     ChapterUpdateRequest,
-    MemoryMoveRequest,
     ChatRequest, 
     ChatResponse
 )
 from src.integrations.organization_repository import (
     update_chapter_in_db,
-    move_memory_in_db
+    update_ai_woven_text_in_db
 )
 
 organization_router = APIRouter(prefix="/api/memoirs", tags=["AI Organization & Editing"])
@@ -22,6 +21,7 @@ client = OpenAI(
     api_key=os.getenv("GEMINI_API_KEY"),
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
 )
+
 @organization_router.post(
     "/{memoir_id}/organize",
     response_model=OrganizeResponseEnvelope,
@@ -36,10 +36,10 @@ async def trigger_ai_organization(
     user_id = str(current_user.get("user_id") or current_user.get("id") or current_user.get("sub"))
 
     participant = await ShareRepository.get_participant(memoir_id, user_id)
-    if not participant or participant.get("role") != "owner":
+    if not participant or participant.get("role") not in ["owner", "co_owner"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the memoir owner can trigger AI organization."
+            detail="Only owners and co-owners can trigger AI organization."
         )
 
     memoir = await ShareRepository.get_memoir_by_id(memoir_id)
@@ -75,16 +75,16 @@ async def manual_update_chapter(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Allows the memoir owner to manually rename or summarize a chapter.
+    Allows the memoir owner or co-owner to manually rename or summarize a chapter.
     Automatically locks the chapter by setting edited_by_owner to True.
     """
     user_id = str(current_user.get("user_id") or current_user.get("id") or current_user.get("sub"))
 
     participant = await ShareRepository.get_participant(memoir_id, user_id)
-    if not participant or participant.get("role") != "owner":
+    if not participant or participant.get("role") not in ["owner", "co_owner"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the owner can edit chapters."
+            detail="Only owners and co-owners can edit chapters."
         )
 
     if not payload.title and not payload.summary:
@@ -108,37 +108,33 @@ async def manual_update_chapter(
 
 
 @organization_router.put(
-    "/{memoir_id}/memories/{memory_id}/move",
+    "/{memoir_id}/memories/{memory_id}/woven-text",
     status_code=status.HTTP_200_OK
 )
-async def manual_move_memory(
+async def update_woven_text(
     memoir_id: str,
     memory_id: str,
-    payload: MemoryMoveRequest,
+    payload: dict,
     current_user: dict = Depends(get_current_user)
 ):
-    """Allows the memoir owner to reassign a memory to a different chapter."""
+    """Allows owners and co-owners to edit the AI-woven narrative text of a specific memory."""
     user_id = str(current_user.get("user_id") or current_user.get("id") or current_user.get("sub"))
 
     participant = await ShareRepository.get_participant(memoir_id, user_id)
-    if not participant or participant.get("role") != "owner":
+    if not participant or participant.get("role") not in ["owner", "co_owner"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the owner can move memories."
+            detail="Only owners and co-owners can edit chapter narrative text."
         )
 
-    updated_memory = move_memory_in_db(
-        memory_id=memory_id,
-        memoir_id=memoir_id,
-        new_chapter_id=payload.new_chapter_id
-    )
+    updated = update_ai_woven_text_in_db(memory_id, memoir_id, payload.get("ai_woven_text"))
     
     return {
         "success": True,
-        "message": "Memory successfully relocated to the target chapter.",
-        "data": updated_memory
+        "message": "Narrative text successfully updated.",
+        "data": updated
     }
-    
+
 
 @organization_router.post(
     "/{memoir_id}/chat",
@@ -156,7 +152,6 @@ async def chat_with_archive(
     """
     user_id = str(current_user.get("user_id") or current_user.get("id") or current_user.get("sub"))
 
-    # Security: Verify participant access
     participant = await ShareRepository.get_participant(memoir_id, user_id)
     if not participant:
         raise HTTPException(
@@ -164,10 +159,8 @@ async def chat_with_archive(
             detail="You do not have access to this memoir."
         )
 
-    # 1. Gather optimized archive table-of-contents context
     archive_context = get_archive_context_for_chat(memoir_id)
 
-    # 2. Build system instructions incorporating the archive context
     system_prompt = (
         "You are an empathetic, insightful archival co-author assisting a user with their family memoir. "
         "You have direct access to the structured table of contents of their archive below. "
@@ -199,7 +192,6 @@ async def chat_with_archive(
 
     except Exception as e:
         error_str = str(e)
-        # Explicitly intercept Google AI Studio rate limits and quotas
         if "429" in error_str or "ResourceExhausted" in error_str or "Too Many Requests" in error_str:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -210,6 +202,7 @@ async def chat_with_archive(
             detail=f"AI chat service failed: {error_str}"
         )
         
+
 @organization_router.get("/{memoir_id}/chapters", status_code=status.HTTP_200_OK)
 async def get_memoir_chapters(
     memoir_id: str,

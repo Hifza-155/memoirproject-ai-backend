@@ -9,9 +9,9 @@ from jwt import PyJWKClient
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from src.core.config import SUPABASE_JWKS_URL
-
+from typing import Optional
 security = HTTPBearer()
-
+optional_security = HTTPBearer(auto_error=False)
 # Initialize the PyJWKClient to fetch and cache public signing keys from Supabase
 jwks_client = PyJWKClient(SUPABASE_JWKS_URL) if SUPABASE_JWKS_URL else None
 
@@ -65,3 +65,35 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Authentication failed: {str(e)}"
         )
+        
+def get_current_user_optional(credentials: Optional[HTTPAuthorizationCredentials] = Depends(optional_security)) -> Optional[dict]:
+    
+    if not credentials:
+        return None
+        
+    token = credentials.credentials
+    try:
+        if not jwks_client:
+            return None
+
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        payload = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["HS256", "ES256", "RS256"],
+            audience="authenticated"
+        )
+
+        user_id = payload.get("sub")
+        if not user_id:
+            return None
+
+        return {
+            "user_id": user_id,
+            "email": payload.get("email"),
+            "role": payload.get("role"),
+            "claims": payload
+        }
+    except Exception:
+        # If token is invalid or expired, treat as unauthenticated (fall back to cookie)
+        return None
