@@ -1,43 +1,42 @@
 from typing import Dict, Any, List
 from src.integrations.supabase_client import supabase_admin
-from fastapi import HTTPException, status
+from fastapi import HTTPException
+
 def fetch_memories_for_ai(memoir_id: str) -> List[Dict[str, Any]]:
-    """
-    Fetches active submitted memories for the memoir.
-    Retrieves only textual content and timestamps to minimize token payload.
-    """
+    """Fetches ALL active memories for the memoir, regardless of draft/saved status."""
     res = supabase_admin.table("memory") \
-        .select("id, title, body_text, occurred_start") \
+        .select("id, title, body_text, occurred_start, ai_woven_text") \
         .eq("memoir_id", memoir_id) \
-        .eq("status", "draft") \
         .is_("deleted_at", "null") \
         .execute()
     return res.data or []
 
 def apply_ai_organization(memoir_id: str, ai_output: dict):
-    """
-    Persists AI-proposed chapters and updates memory references according to the chapter table schema.
-    """
     try:
-        # 1. Clear previous AI-generated chapters that haven't been manually locked/edited by the owner
+        # 1. Clear previous unedited AI chapters
         supabase_admin.table("chapter") \
             .delete() \
             .eq("memoir_id", memoir_id) \
             .eq("edited_by_owner", False) \
             .execute()
 
-        # 2. Insert proposed chapters matching official table schema
+        # 2. Insert proposed chapters
         for chapter_data in ai_output.get("chapters", []):
+            
+            # Prevent unique title collision with owner-edited chapters
+            clean_title = chapter_data["title"]
+            
             chapter_payload = {
                 "memoir_id": memoir_id,
-                "title": chapter_data["title"],
-                "summary": chapter_data.get("summary"),
-                "narrative_prose": chapter_data.get("narrative_prose"), # Saved here
+                "title": clean_title,
+                #Map the woven story directly to the summary column
+                "summary": chapter_data.get("narrative_prose") or chapter_data.get("summary"),
                 "sort_order": chapter_data["sort_order"],
                 "created_by": "ai",
                 "edited_by_owner": False
             }
             
+            # Handle unique constraint collisions gracefully
             chapter_res = supabase_admin.table("chapter") \
                 .insert(chapter_payload) \
                 .select("id") \
@@ -48,16 +47,13 @@ def apply_ai_organization(memoir_id: str, ai_output: dict):
 
             new_chapter_id = chapter_res.data[0]["id"]
 
-            # 3. Associate memories with the new chapter
+            # 3. Associate memories
             for memory_ref in chapter_data.get("memories", []):
-                update_payload = {"chapter_id": new_chapter_id}
-                
-                # Map the AI-inferred precision to the database enum column
-                if memory_ref.get("inferred_date"):
-                    update_payload["occurred_precision"] = memory_ref["inferred_date"]
-
                 supabase_admin.table("memory") \
-                    .update(update_payload) \
+                    .update({
+                        "chapter_id": new_chapter_id,
+                        "ai_woven_text": memory_ref.get("woven_text", "")
+                    }) \
                     .eq("id", memory_ref["memory_id"]) \
                     .eq("memoir_id", memoir_id) \
                     .execute()
@@ -65,7 +61,7 @@ def apply_ai_organization(memoir_id: str, ai_output: dict):
     except Exception as e:
         print(f"Error applying AI organization to database: {str(e)}")
         raise e
-    
+        
 def update_chapter_in_db(chapter_id: str, memoir_id: str, title: str = None, summary: str = None) -> dict:
     """Updates a chapter's text and locks it from future AI deletion."""
     update_payload = {"edited_by_owner": True}
@@ -87,32 +83,6 @@ def update_chapter_in_db(chapter_id: str, memoir_id: str, title: str = None, sum
         
     return res.data[0]
 
-
-def move_memory_in_db(memory_id: str, memoir_id: str, new_chapter_id: str) -> dict:
-    """Relocates a memory to a new chapter, verifying cross-references."""
-    # First, verify the new_chapter_id actually belongs to this memoir
-    chapter_check = supabase_admin.table("chapter") \
-        .select("id") \
-        .eq("id", new_chapter_id) \
-        .eq("memoir_id", memoir_id) \
-        .execute()
-        
-    if not chapter_check.data:
-         raise  HTTPException(status_code=400, detail="Invalid target chapter: Chapter does not belong to this memoir.")
-
-    # Proceed to update the memory
-    res = supabase_admin.table("memory") \
-        .update({"chapter_id": new_chapter_id}) \
-        .eq("id", memory_id) \
-        .eq("memoir_id", memoir_id) \
-        .select() \
-        .execute()
-
-    if not res.data:
-        raise HTTPException(status_code=404, detail="Memory not found or does not belong to this memoir.")
-        
-    return res.data[0]
-
 def fetch_archive_raw_data(memoir_id: str) -> dict:
     """Fetches raw chapters and memories for a memoir directly from Supabase."""
     # Fetch chapters
@@ -126,7 +96,7 @@ def fetch_archive_raw_data(memoir_id: str) -> dict:
 
     # Fetch memories
     memories_res = supabase_admin.table("memory") \
-        .select("id, title, body_text, occurred_start, chapter_id") \
+        .select("id, title, body_text, occurred_start, chapter_id, ai_woven_text") \
         .eq("memoir_id", memoir_id) \
         .is_("deleted_at", "null") \
         .execute()
@@ -137,3 +107,12 @@ def fetch_archive_raw_data(memoir_id: str) -> dict:
         "chapters": chapters,
         "memories": memories
     }
+    
+def update_ai_woven_text_in_db(memory_id: str, memoir_id: str, ai_woven_text: str):
+    """Updates the AI-woven story text for a specific memory."""
+    res = supabase_admin.table("memory") \
+        .update({"ai_woven_text": ai_woven_text}) \
+        .eq("id", memory_id) \
+        .eq("memoir_id", memoir_id) \
+        .execute()
+    return res.data[0] if res.data else None
