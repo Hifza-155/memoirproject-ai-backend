@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from src.integrations import auth_repository
 from src.schemas.auth import UserRegisterRequest, UserLoginRequest
-from src.integrations.supabase_client import supabase
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,6 @@ class AuthService:
                     detail="We couldn't complete your registration. Please try again."
                 )
 
-            # CRITICAL FIX: Catch the Supabase "Fake Success" for duplicate emails
             # If a user already exists, Supabase returns a user object but empties their identities array
             if hasattr(user, "identities") and user.identities is not None:
                 if len(user.identities) == 0:
@@ -54,29 +52,41 @@ class AuthService:
 
             user_id = str(user.id)
             
-            # ... (Keep the rest of your normal immediate login session code the same)
             logger.info(f"User successfully registered and authenticated: {email}")
-            return {
-                "success": True,
-                "message": "Registration successful.",
-                "requires_confirmation": False,
-                "access_token": session.access_token if session else None,
-                "refresh_token": session.refresh_token if session else None,
-                "user": {
-                    "id": user_id,
-                    "email": email,
-                    "full_name": full_name
+            
+            if session:
+                return {
+                    "success": True,
+                    "message": "Registration successful.",
+                    "requires_confirmation": False,
+                    "access_token": session.access_token,
+                    "refresh_token": session.refresh_token,
+                    "user": {
+                        "id": user_id,
+                        "email": email,
+                        "full_name": full_name
+                    }
                 }
-            }
+            else:
+                return {
+                    "success": True,
+                    "message": "Registration successful. Please check your email to confirm your account.",
+                    "requires_confirmation": True,
+                    "access_token": None,
+                    "refresh_token": None,
+                    "user": {
+                        "id": user_id,
+                        "email": email,
+                        "full_name": full_name
+                    }
+                }
 
         except Exception as e:
-            # If it's our clean HTTPException from above, re-raise it so the frontend sees it
             if isinstance(e, HTTPException):
                 raise e
             
             error_msg = str(e).lower()
             
-            # Catch duplicate email errors and return 409 Conflict
             if "already registered" in error_msg or "already exists" in error_msg or "user already registered" in error_msg:
                 logger.warning(f"Registration attempt failed - email already in use: {email}")
                 raise HTTPException(
