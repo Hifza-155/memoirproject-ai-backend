@@ -1,5 +1,6 @@
-from typing import List, Optional
+from typing import List, Optional, Literal
 from pydantic import BaseModel, Field, field_validator
+
 class MemoryMapping(BaseModel):
     memory_id: str = Field(description="The exact UUID of the memory.")
     inferred_date: Optional[str] = Field(default="day")
@@ -18,12 +19,12 @@ class MemoryMapping(BaseModel):
 
 class ChapterOutput(BaseModel):
     title: str = Field(description="A distinct, chronological title for this chapter.")
-    # Notice we removed narrative_prose entirely!
     sort_order: int = Field(description="The chronological sequence order.")
     memories: List[MemoryMapping] = Field(description="List of memories assigned to this chapter, in chronological order.")
     
 class MemoirOrganizationOutput(BaseModel):
     chapters: List[ChapterOutput] = Field(description="List of chronological chapters covering all provided memories.")
+
 class OrganizeResponseEnvelope(BaseModel):
     success: bool = True
     message: str = "Organization started in the background."
@@ -36,12 +37,27 @@ class MemoryMoveRequest(BaseModel):
     new_chapter_id: str = Field(description="The ID of the chapter this memory should be moved to.")
     
 class ChatMessage(BaseModel):
-    role: str = Field(description="The role of the speaker, e.g. 'user' or 'assistant'.")
-    content: str = Field(description="The text content of the message.")
+    # 1. Enforce strict literal typing to prevent System Prompt Injection
+    role: Literal["user", "assistant"] = Field(
+        description="The role of the speaker, strictly 'user' or 'assistant'."
+    )
+    # 2. Cap individual message size to prevent Denial of Wallet attacks
+    content: str = Field(
+        max_length=2000, 
+        description="The text content of the message, capped at 2000 characters."
+    )
 
 class ChatRequest(BaseModel):
-    message: str = Field(description="The user's latest prompt or question for the AI co-author.")
-    history: Optional[List[ChatMessage]] = Field(default=[], description="Past conversation turns for context.")
+    message: str = Field(
+        max_length=2000, 
+        description="The user's latest prompt or question for the AI co-author."
+    )
+    # 3. Cap the maximum number of history turns stored in the payload
+    history: Optional[List[ChatMessage]] = Field(
+        default=[], 
+        max_length=20, 
+        description="Past conversation turns for context, capped at 20 turns."
+    )
 
 class ChatResponse(BaseModel):
     success: bool = True

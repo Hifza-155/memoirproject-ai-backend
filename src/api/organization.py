@@ -1,4 +1,4 @@
-import os
+from src.core.config import settings 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from src.core.auth import get_current_user
 from src.integrations.share_repository import ShareRepository
@@ -176,13 +176,17 @@ async def chat_with_archive(
         messages = [{"role": "system", "content": system_prompt}]
         
         if payload.history:
-            for hist_item in payload.history:
-                messages.append({"role": hist_item.role, "content": hist_item.content})
+            # FIX: Secondary safeguard - strictly slice the last 20 messages
+            safe_history = payload.history[-20:]
+            for hist_item in safe_history:
+                # FIX: Double-check that we NEVER append a rogue system prompt from the client
+                if hist_item.role in ["user", "assistant"]:
+                    messages.append({"role": hist_item.role, "content": hist_item.content})
                 
         messages.append({"role": "user", "content": payload.message})
 
         response = client.chat.completions.create(
-            model="gemini-3.8-flash",
+            model=settings.gemini_model,
             messages=messages
         )
 
