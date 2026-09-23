@@ -10,7 +10,7 @@ from src.domain.auth_service import AuthService
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
-@router.post("/signup/", status_code=status.HTTP_201_CREATED)
+@router.post("/signup/", status_code=status.HTTP_201_CREATED,include_in_schema=False)
 async def register_user_endpoint(payload: UserRegisterRequest):
     """
     Registers a new user account, triggers automatic database account provisioning,
@@ -32,7 +32,7 @@ async def register_user_endpoint(payload: UserRegisterRequest):
     }
     
 @router.post("/login", status_code=status.HTTP_200_OK)
-@router.post("/login/", status_code=status.HTTP_200_OK)
+@router.post("/login/", status_code=status.HTTP_200_OK,include_in_schema=False)
 async def login_user_endpoint(payload: UserLoginRequest):
     """
     Authenticates an existing user and returns their session access token.

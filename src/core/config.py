@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     default="http://localhost:3000/contribute", 
     validation_alias="SHARE_LINK_BASE_URL"
     )    
+    
+    gemini_model: str = Field(
+        default="gemini-3.8-flash", 
+        validation_alias="GEMINI_MODEL"
+    )
 settings = Settings()
 
 # Storage tiers for media asset lifecycle management
