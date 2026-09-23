@@ -1,6 +1,8 @@
 import os
 import json
 import asyncio
+import logging
+from src.core.config import settings  
 from openai import OpenAI
 from src.schemas.organization import MemoirOrganizationOutput
 from src.integrations.organization_repository import (
@@ -9,6 +11,8 @@ from src.integrations.organization_repository import (
     fetch_archive_raw_data,
     update_generation_status 
 )
+
+logger = logging.getLogger(__name__)
 
 def get_ai_client() -> OpenAI:
     """
@@ -34,7 +38,7 @@ async def perform_background_organization(memoir_id: str):
     
     memories = fetch_memories_for_ai(memoir_id)
     if not memories:
-        print(f"No submitted memories found for memoir {memoir_id}.")
+        logger.warning(f"No submitted memories found for memoir {memoir_id}.")
         update_generation_status(memoir_id, "failed", "No saved memories found to organize.")
         return
 
@@ -77,7 +81,7 @@ async def perform_background_organization(memoir_id: str):
     try:
         client = get_ai_client()
     except RuntimeError as re:
-        # Catch missing API key instantly and fail job
+        logger.error(f"Failed to initialize AI client for {memoir_id}: {str(re)}")
         update_generation_status(memoir_id, "failed", str(re))
         return
     
@@ -86,7 +90,7 @@ async def perform_background_organization(memoir_id: str):
     for attempt in range(max_retries):
         try:
             response = client.chat.completions.create(
-                model="gemini-3.6-flash",
+                model=settings.gemini_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": json.dumps(payload_for_llm)}
@@ -98,7 +102,7 @@ async def perform_background_organization(memoir_id: str):
             validated_output = MemoirOrganizationOutput.model_validate_json(content)
             apply_ai_organization(memoir_id, validated_output.model_dump())
             
-            print(f"AI organization successfully applied for memoir {memoir_id}.")
+            logger.info(f"AI organization successfully applied for memoir {memoir_id}.")
             
             # 2. Mark job as completed on success
             update_generation_status(memoir_id, "completed")
@@ -109,7 +113,7 @@ async def perform_background_organization(memoir_id: str):
             if "503" in error_str or "overloaded" in error_str or "429" in error_str:
                 if attempt == max_retries - 1:
                     error_msg = f"AI organization failed after {max_retries} attempts."
-                    print(f"{error_msg} for {memoir_id}.")
+                    logger.error(f"{error_msg} for {memoir_id}.")
                     
                     # 3. Mark job as failed on exhaustion
                     update_generation_status(memoir_id, "failed", error_msg)
@@ -117,7 +121,7 @@ async def perform_background_organization(memoir_id: str):
                 await asyncio.sleep(2 * (2 ** attempt)) # Waits 2s, 4s, 8s
             else:
                 error_msg = f"AI organization job failed: {str(e)}"
-                print(f"{error_msg} for memoir {memoir_id}")
+                logger.error(f"{error_msg} for memoir {memoir_id}")
                 
                 # 3. Mark job as failed immediately for logic/schema errors
                 update_generation_status(memoir_id, "failed", error_msg)

@@ -1,6 +1,9 @@
 from typing import Dict, Any, List
 from src.integrations.supabase_client import supabase_admin
 from fastapi import HTTPException
+import logging
+
+logger = logging.getLogger(__name__)
 
 def fetch_memories_for_ai(memoir_id: str) -> List[Dict[str, Any]]:
     """Fetches ALL completed (saved) memories for the memoir, explicitly excluding unfinished drafts."""
@@ -13,56 +16,24 @@ def fetch_memories_for_ai(memoir_id: str) -> List[Dict[str, Any]]:
     return res.data or []
 
 def apply_ai_organization(memoir_id: str, ai_output: dict):
+    """
+    Calls a Postgres RPC to atomically clear old chapters, insert new ones, 
+    and update all memories in a single network round-trip.
+    """
     try:
-        # 1. Clear previous unedited AI chapters
-        supabase_admin.table("chapter") \
-            .delete() \
-            .eq("memoir_id", memoir_id) \
-            .eq("edited_by_owner", False) \
-            .execute()
-
-        # 2. Insert proposed chapters
-        for chapter_data in ai_output.get("chapters", []):
-            
-            # Prevent unique title collision with owner-edited chapters
-            clean_title = chapter_data["title"]
-            
-            chapter_payload = {
-                "memoir_id": memoir_id,
-                "title": clean_title,
-                #Map the woven story directly to the summary column
-                "summary": chapter_data.get("narrative_prose") or chapter_data.get("summary"),
-                "sort_order": chapter_data["sort_order"],
-                "created_by": "ai",
-                "edited_by_owner": False
+        # Replaces 90+ HTTP round-trips with 1 atomic database transaction!
+        supabase_admin.rpc(
+            "apply_ai_organization_tx",
+            {
+                "p_memoir_id": memoir_id,
+                "p_chapters": ai_output.get("chapters", [])
             }
-            
-            # Handle unique constraint collisions gracefully
-            chapter_res = supabase_admin.table("chapter") \
-                .insert(chapter_payload) \
-                .select("id") \
-                .execute()
-
-            if not chapter_res.data:
-                continue
-
-            new_chapter_id = chapter_res.data[0]["id"]
-
-            # 3. Associate memories
-            for memory_ref in chapter_data.get("memories", []):
-                supabase_admin.table("memory") \
-                    .update({
-                        "chapter_id": new_chapter_id,
-                        "ai_woven_text": memory_ref.get("woven_text", "")
-                    }) \
-                    .eq("id", memory_ref["memory_id"]) \
-                    .eq("memoir_id", memoir_id) \
-                    .execute()
-                    
-    except Exception as e:
-        print(f"Error applying AI organization to database: {str(e)}")
-        raise e
+        ).execute()
         
+    except Exception as e:
+        logger.error(f"Error applying AI organization RPC for {memoir_id}: {str(e)}")
+        raise e
+            
 def update_chapter_in_db(chapter_id: str, memoir_id: str, title: str = None, summary: str = None) -> dict:
     """Updates a chapter's text and locks it from future AI deletion."""
     update_payload = {"edited_by_owner": True}
