@@ -5,6 +5,7 @@ date timeline normalization, media asset linking, feed retrieval, and lifecycle 
 fully decoupled from direct database infrastructure calls.
 """
 
+import logging
 from fastapi import HTTPException, status
 from src.schemas.memory import MemoryCreateRequest
 from src.integrations import memory_repository
@@ -12,6 +13,9 @@ from src.domain.authorization import verify_active_participant
 from src.integrations import storage_adapter
 from src.domain.transcription_service import transcribe_and_store_audio  
 from src.integrations.supabase_client import supabase_admin  
+
+logger = logging.getLogger(__name__)
+
 class MemoryService:
     """
     Handles business logic for memory stories, including participant security enforcement,
@@ -48,12 +52,14 @@ class MemoryService:
         try:
             mem_res = memory_repository.insert_memory(memory_data)
         except Exception as e:
+            logger.error(f"Database error while creating memory: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Database error while creating memory: {str(e)}"
             )
 
         if not mem_res or not mem_res.data:
+            logger.error("Failed to create memory record (empty response).")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create memory record."
@@ -64,13 +70,14 @@ class MemoryService:
 
         # Associate attached media assets via the junction table with ownership verification
         if payload.media_asset_ids:
-            print(f"DEBUG: Found media_asset_ids in payload: {payload.media_asset_ids}")
+            logger.info(f"Found media_asset_ids in payload: {payload.media_asset_ids}")
             
             owned_assets = memory_repository.verify_media_assets_belong_to_memoir(
                 payload.memoir_id, payload.media_asset_ids
             )
             
             if len(owned_assets) != len(payload.media_asset_ids):
+                logger.warning(f"Forbidden media asset link attempt for memoir {payload.memoir_id}")
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="One or more media assets do not belong to this memoir container."
@@ -88,6 +95,7 @@ class MemoryService:
             try:
                 memory_repository.insert_memory_media(link_records)
             except Exception as e:
+                logger.error(f"Failed to link media assets to memory {memory_id}: {str(e)}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Failed to link media assets to memory: {str(e)}"
@@ -97,33 +105,33 @@ class MemoryService:
             # INTEGRATION POINT: Trigger AssemblyAI Transcription for newly attached audio
             # =========================================================================
             for media_id in payload.media_asset_ids:
-                print(f"DEBUG: Checking media_id {media_id} for transcription trigger...")
+                logger.debug(f"Checking media_id {media_id} for transcription trigger...")
                 
                 # Fetch asset record securely via the repository
                 asset_record = memory_repository.fetch_media_asset_record(str(media_id))
                 
-                print(f"DEBUG: Fetched asset record from DB: {asset_record}")
+                logger.debug(f"Fetched asset record from DB: {asset_record}")
 
                 if asset_record and asset_record.get("kind") == "audio":
                     storage_key = asset_record.get("storage_key")
-                    print(f"DEBUG: Audio asset matched! Storage key found: {storage_key}")
+                    logger.info(f"Audio asset matched! Storage key found: {storage_key}")
                     
                     if storage_key:
                         try:
-                            print(f"DEBUG: Invoking transcribe_and_store_audio for asset {media_id}...")
+                            logger.info(f"Invoking transcribe_and_store_audio for asset {media_id}...")
                             transcribe_and_store_audio(
                                 media_asset_id=str(media_id),
                                 memoir_id=str(payload.memoir_id),
                                 storage_key=storage_key
                             )
-                            print(f"DEBUG: Transcription task processed successfully for {media_id}")
+                            logger.info(f"Transcription task processed successfully for {media_id}")
                         except Exception as trig_err:
-                            print(f"ERROR: Failed to trigger transcription: {str(trig_err)}")
+                            logger.error(f"Failed to trigger transcription for {media_id}: {str(trig_err)}")
                     else:
-                        print(f"ERROR: Audio asset {media_id} has a missing storage_key!")
+                        logger.error(f"Audio asset {media_id} has a missing storage_key!")
                 else:
                     asset_kind = asset_record.get('kind') if asset_record else 'Not Found'
-                    print(f"DEBUG: Asset {media_id} skipped (Kind: {asset_kind})")
+                    logger.debug(f"Asset {media_id} skipped (Kind: {asset_kind})")
         return new_memory
     
     @classmethod
@@ -139,6 +147,7 @@ class MemoryService:
         try:
             res = memory_repository.fetch_memoir_feed_records(str(memoir_id), limit, offset)
         except Exception as e:
+            logger.error(f"Failed to fetch memoir feed for {memoir_id}: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to fetch memoir feed: {str(e)}"
@@ -159,7 +168,8 @@ class MemoryService:
                     if storage_key:
                         try:
                             playback_url = storage_adapter.create_playback_url(storage_key)
-                        except Exception:
+                        except Exception as url_err:
+                            logger.warning(f"Failed to create playback URL for {storage_key}: {url_err}")
                             playback_url = None
                     
                     asset["playback_url"] = playback_url
@@ -167,15 +177,19 @@ class MemoryService:
                     # =========================================================================
                     # INTEGRATION POINT: Hydrate transcript data if the media asset is audio
                     # =========================================================================
-                    if asset.get("kind") == "audio":
+                    if asset.get("kind") == "audio" or str(asset.get("mime_type", "")).startswith("audio/"):
                         asset_id = asset.get("id")
                         try:
                             # CRITICAL FIX: Use supabase_admin here to bypass RLS blocks
                             transcript_res = supabase_admin.table("transcript").select("*").eq("media_asset_id", asset_id).maybe_single().execute()
                             asset["transcript"] = transcript_res.data if transcript_res and transcript_res.data else None
                         except Exception as e:
-                            print(f"Transcript fetch failed for {asset_id}: {e}")
+                            logger.error(f"Transcript fetch failed for {asset_id}: {e}")
                             asset["transcript"] = None
+                    else:
+                        # FIX: explicitly assign None for consistent API response shape across all assets
+                        asset["transcript"] = None
+                        
                     media_list.append(asset)
             
             mem["media_assets"] = media_list
@@ -191,6 +205,7 @@ class MemoryService:
         """
         participant_res = memory_repository.fetch_participant(memoir_id, user_id)
         if not participant_res.data:
+            logger.warning(f"User {user_id} denied delete access to memory {memory_id} in {memoir_id}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You are not a participant of this memoir."
@@ -203,6 +218,7 @@ class MemoryService:
         try:
             mem_res = memory_repository.fetch_memory_by_id(memory_id, memoir_id)
         except Exception as e:
+            logger.error(f"Failed to fetch memory {memory_id} for deletion: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
 
         if not mem_res.data:
@@ -217,6 +233,7 @@ class MemoryService:
         )
 
         if not (is_owner_or_admin or is_author):
+            logger.warning(f"User {user_id} lacks permission to delete memory {memory_id}")
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to delete this memory."
@@ -230,7 +247,9 @@ class MemoryService:
             
         try:
             memory_repository.soft_delete_memory_record(memory_id, memoir_id)
+            logger.info(f"Memory {memory_id} successfully soft-deleted by user {user_id}")
         except Exception as e:
+            logger.error(f"Failed to soft-delete memory {memory_id}: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to delete memory: {str(e)}"

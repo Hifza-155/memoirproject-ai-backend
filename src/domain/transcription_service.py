@@ -1,8 +1,11 @@
 import os
 import time
+import logging
 from groq import Groq
 from src.integrations.memory_repository import upsert_transcript_record
 from src.integrations.supabase_client import supabase_admin
+
+logger = logging.getLogger(__name__)
 
 def transcribe_and_store_audio(media_asset_id: str, memoir_id: str, storage_key: str):
     """
@@ -11,7 +14,7 @@ def transcribe_and_store_audio(media_asset_id: str, memoir_id: str, storage_key:
     """
     api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        print("CRITICAL ERROR: GROQ_API_KEY is missing from environment variables!")
+        logger.error("CRITICAL ERROR: GROQ_API_KEY is missing from environment variables!")
         raise ValueError("GROQ_API_KEY is missing")
 
     groq_client = Groq(api_key=api_key)
@@ -21,22 +24,22 @@ def transcribe_and_store_audio(media_asset_id: str, memoir_id: str, storage_key:
         audio_bytes = None
         
         # Retry loop (up to 3 attempts with a 1.5s delay) to handle browser upload race conditions
-        print(f"Attempting to download storage key '{storage_key}' from bucket '{bucket_name}'...")
+        logger.info(f"Attempting to download storage key '{storage_key}' from bucket '{bucket_name}'...")
         for attempt in range(1, 4):
             try:
                 audio_bytes = supabase_admin.storage.from_(bucket_name).download(storage_key)
                 if audio_bytes:
-                    print(f"Successfully downloaded audio bytes on attempt {attempt}")
+                    logger.info(f"Successfully downloaded audio bytes for {storage_key} on attempt {attempt}")
                     break
             except Exception as dl_err:
-                print(f"Download attempt {attempt} failed (file might still be uploading): {str(dl_err)}")
+                logger.warning(f"Download attempt {attempt} failed for {storage_key} (file might still be uploading): {str(dl_err)}")
                 if attempt < 3:
                     time.sleep(1.5)
 
         if not audio_bytes:
             raise Exception(f"Download returned empty bytes or 404 after retries for key: {storage_key}")
 
-        print("Uploading raw audio bytes to Groq Whisper API...")
+        logger.info(f"Uploading raw audio bytes to Groq Whisper API for {storage_key}...")
         
         # Groq requires a filename with a recognized extension to parse the format
         extension = storage_key.split('.')[-1] if '.' in storage_key else 'webm'
@@ -49,7 +52,7 @@ def transcribe_and_store_audio(media_asset_id: str, memoir_id: str, storage_key:
         )
         
         raw_text = transcript_result.text or ""
-        print(f"Transcription successful! Text: {raw_text[:60]}...")
+        logger.info(f"Transcription successful for {storage_key}! Text: {raw_text[:60]}...")
 
         transcript_payload = {
             "media_asset_id": media_asset_id,
@@ -63,9 +66,9 @@ def transcribe_and_store_audio(media_asset_id: str, memoir_id: str, storage_key:
         
         response = upsert_transcript_record(transcript_payload)
         
-        print("Transcript successfully saved to database!", response.data)
+        logger.info(f"Transcript successfully saved to database for asset {media_asset_id}.")
         return response.data
 
     except Exception as e:
-        print(f"CRITICAL TRANSCRIPTION EXCEPTION CAUGHT: {str(e)}")
+        logger.error(f"CRITICAL TRANSCRIPTION EXCEPTION CAUGHT for {media_asset_id}: {str(e)}")
         raise e
