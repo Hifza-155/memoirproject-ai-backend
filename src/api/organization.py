@@ -1,10 +1,13 @@
 import os
-from openai import OpenAI
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from src.core.auth import get_current_user
 from src.integrations.share_repository import ShareRepository
 from src.integrations.organization_repository import fetch_archive_raw_data
-from src.domain.organization_service import perform_background_organization, get_archive_context_for_chat
+from src.domain.organization_service import (
+    perform_background_organization, 
+    get_archive_context_for_chat,
+    get_ai_client 
+)
 from src.schemas.organization import (
     OrganizeResponseEnvelope,
     ChapterUpdateRequest,
@@ -17,10 +20,7 @@ from src.integrations.organization_repository import (
 )
 
 organization_router = APIRouter(prefix="/api/memoirs", tags=["AI Organization & Editing"])
-client = OpenAI(
-    api_key=os.getenv("GEMINI_API_KEY"),
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-)
+# Global OpenAI client removed to prevent duplicate initialization
 
 @organization_router.post(
     "/{memoir_id}/organize",
@@ -170,6 +170,9 @@ async def chat_with_archive(
     )
 
     try:
+        # Initialize client lazily here
+        client = get_ai_client()
+        
         messages = [{"role": "system", "content": system_prompt}]
         
         if payload.history:
@@ -190,6 +193,12 @@ async def chat_with_archive(
             reply=reply_text
         )
 
+    except RuntimeError as re:
+        # Fails fast cleanly if API key is missing
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(re)
+        )
     except Exception as e:
         error_str = str(e)
         if "429" in error_str or "ResourceExhausted" in error_str or "Too Many Requests" in error_str:

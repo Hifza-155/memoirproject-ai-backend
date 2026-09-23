@@ -3,10 +3,11 @@ from src.integrations.supabase_client import supabase_admin
 from fastapi import HTTPException
 
 def fetch_memories_for_ai(memoir_id: str) -> List[Dict[str, Any]]:
-    """Fetches ALL active memories for the memoir, regardless of draft/saved status."""
+    """Fetches ALL completed (saved) memories for the memoir, explicitly excluding unfinished drafts."""
     res = supabase_admin.table("memory") \
         .select("id, title, body_text, occurred_start, ai_woven_text") \
         .eq("memoir_id", memoir_id) \
+        .eq("status", "saved") \
         .is_("deleted_at", "null") \
         .execute()
     return res.data or []
@@ -84,7 +85,7 @@ def update_chapter_in_db(chapter_id: str, memoir_id: str, title: str = None, sum
     return res.data[0]
 
 def fetch_archive_raw_data(memoir_id: str) -> dict:
-    """Fetches raw chapters and memories for a memoir directly from Supabase."""
+    """Fetches raw chapters and finalized (saved) memories for a memoir directly from Supabase."""
     # Fetch chapters
     chapters_res = supabase_admin.table("chapter") \
         .select("id, title, summary, sort_order") \
@@ -98,6 +99,7 @@ def fetch_archive_raw_data(memoir_id: str) -> dict:
     memories_res = supabase_admin.table("memory") \
         .select("id, title, body_text, occurred_start, chapter_id, ai_woven_text") \
         .eq("memoir_id", memoir_id) \
+        .eq("status", "saved") \
         .is_("deleted_at", "null") \
         .execute()
         
@@ -116,3 +118,24 @@ def update_ai_woven_text_in_db(memory_id: str, memoir_id: str, ai_woven_text: st
         .eq("memoir_id", memoir_id) \
         .execute()
     return res.data[0] if res.data else None
+
+def update_generation_status(memoir_id: str, status: str, error_message: str = None):
+    """
+    Updates the AI generation job status in the database so the frontend can poll for completion/failure.
+    """
+    payload = {"status": status}
+    if error_message is not None:
+        payload["error_message"] = error_message
+    else:
+        payload["error_message"] = None  # Clear errors on success
+        
+    try:
+        # Check if a tracking row already exists
+        existing = supabase_admin.table("memoir_generation").select("id").eq("memoir_id", memoir_id).execute()
+        if existing.data:
+            supabase_admin.table("memoir_generation").update(payload).eq("memoir_id", memoir_id).execute()
+        else:
+            payload["memoir_id"] = memoir_id
+            supabase_admin.table("memoir_generation").insert(payload).execute()
+    except Exception as e:
+        print(f"Failed to record generation status '{status}' for memoir {memoir_id}: {str(e)}")

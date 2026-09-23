@@ -10,8 +10,6 @@ class MemoryCreateRequest(BaseModel):
     status: Literal["draft", "submitted"] = Field("draft")    
     occurred_start: Optional[date] = Field(None)
     occurred_end: Optional[date] = Field(None)
-    
-    # FIX: Defaults removed. Will safely pass as None if no dates are provided.
     occurred_precision: Optional[Literal["day", "month", "year", "decade"]] = Field(None)
     date_source: Optional[Literal["owner", "contributor", "ai"]] = Field(None)
     

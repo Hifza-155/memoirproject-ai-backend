@@ -6,22 +6,36 @@ from src.schemas.organization import MemoirOrganizationOutput
 from src.integrations.organization_repository import (
     fetch_memories_for_ai,
     apply_ai_organization,
-    fetch_archive_raw_data
+    fetch_archive_raw_data,
+    update_generation_status 
 )
 
-client = OpenAI(
-    api_key=os.getenv("GEMINI_API_KEY"),
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-)
+def get_ai_client() -> OpenAI:
+    """
+    Lazily constructs the AI client and fails fast if the API key is missing.
+    This resolves the duplicate global initialization issue.
+    """
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("CRITICAL: GEMINI_API_KEY is missing in environment variables.")
+    
+    return OpenAI(
+        api_key=api_key,
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+    )
 
 async def perform_background_organization(memoir_id: str):
     """
     Background worker orchestrating memory fetching, structured LLM clustering,
     and database persistence with exponential backoff for 503 limits.
     """
+    # 1. Mark job as processing
+    update_generation_status(memoir_id, "processing")
+    
     memories = fetch_memories_for_ai(memoir_id)
     if not memories:
         print(f"No submitted memories found for memoir {memoir_id}.")
+        update_generation_status(memoir_id, "failed", "No saved memories found to organize.")
         return
 
     payload_for_llm = [
@@ -60,6 +74,13 @@ async def perform_background_organization(memoir_id: str):
         "}"
     )
     
+    try:
+        client = get_ai_client()
+    except RuntimeError as re:
+        # Catch missing API key instantly and fail job
+        update_generation_status(memoir_id, "failed", str(re))
+        return
+    
     # FIX: Exponential backoff loop to silently retry on 503s
     max_retries = 4
     for attempt in range(max_retries):
@@ -76,18 +97,30 @@ async def perform_background_organization(memoir_id: str):
             content = response.choices[0].message.content
             validated_output = MemoirOrganizationOutput.model_validate_json(content)
             apply_ai_organization(memoir_id, validated_output.model_dump())
+            
             print(f"AI organization successfully applied for memoir {memoir_id}.")
+            
+            # 2. Mark job as completed on success
+            update_generation_status(memoir_id, "completed")
             break  # Exit loop on success
             
         except Exception as e:
             error_str = str(e).lower()
             if "503" in error_str or "overloaded" in error_str or "429" in error_str:
                 if attempt == max_retries - 1:
-                    print(f"AI organization failed after {max_retries} attempts for {memoir_id}.")
+                    error_msg = f"AI organization failed after {max_retries} attempts."
+                    print(f"{error_msg} for {memoir_id}.")
+                    
+                    # 3. Mark job as failed on exhaustion
+                    update_generation_status(memoir_id, "failed", error_msg)
                     return
                 await asyncio.sleep(2 * (2 ** attempt)) # Waits 2s, 4s, 8s
             else:
-                print(f"AI organization job failed for memoir {memoir_id}: {str(e)}")
+                error_msg = f"AI organization job failed: {str(e)}"
+                print(f"{error_msg} for memoir {memoir_id}")
+                
+                # 3. Mark job as failed immediately for logic/schema errors
+                update_generation_status(memoir_id, "failed", error_msg)
                 return
 
 def get_archive_context_for_chat(memoir_id: str) -> str:
