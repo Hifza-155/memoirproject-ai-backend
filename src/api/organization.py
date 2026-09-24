@@ -2,6 +2,7 @@ from src.core.config import settings
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from src.core.auth import get_current_user
 from src.integrations.share_repository import ShareRepository
+from src.integrations.supabase_client import supabase_admin
 from src.integrations.organization_repository import fetch_archive_raw_data
 from src.domain.organization_service import (
     perform_background_organization, 
@@ -63,6 +64,34 @@ async def trigger_ai_organization(
         job_status="processing"
     )
 
+@organization_router.post(
+    "/{memoir_id}/publish",
+    status_code=status.HTTP_200_OK
+)
+async def publish_memoir(
+    memoir_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Permanently locks the memoir and transitions it to the published read-only state."""
+    user_id = str(current_user.get("user_id") or current_user.get("id") or current_user.get("sub"))
+
+    participant = await ShareRepository.get_participant(memoir_id, user_id)
+    if not participant or participant.get("role") not in ["owner", "co_owner"]:
+        raise HTTPException(status_code=403, detail="Only owners can publish the memoir.")
+
+    # Lock the memoir in the database
+    res = supabase_admin.table("memoir") \
+        .update({"status": "published"}) \
+        .eq("id", memoir_id) \
+        .execute()
+
+    if not res.data:
+        raise HTTPException(status_code=404, detail="Memoir not found.")
+
+    return {
+        "success": True,
+        "message": "Memoir successfully published and locked."
+    }
 
 @organization_router.put(
     "/{memoir_id}/chapters/{chapter_id}",

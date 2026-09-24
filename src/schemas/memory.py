@@ -21,7 +21,7 @@ class MemoryCreateRequest(BaseModel):
     memoir_id: uuid.UUID = Field(..., description="UUID of the parent memoir container")
     title: Optional[str] = Field(None, max_length=255)
     body_text: Optional[str] = Field(None, max_length=10000)
-    status: Literal["draft", "submitted"] = Field("draft")    
+    status: Literal["draft", "submitted"] = Field("submitted")    
     occurred_start: Optional[date] = Field(None)
     occurred_end: Optional[date] = Field(None)
     occurred_precision: Optional[Literal["day", "month", "year", "decade"]] = Field(None)

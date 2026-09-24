@@ -10,7 +10,7 @@ def fetch_memories_for_ai(memoir_id: str) -> List[Dict[str, Any]]:
     res = supabase_admin.table("memory") \
         .select("id, title, body_text, occurred_start, ai_woven_text") \
         .eq("memoir_id", memoir_id) \
-        .eq("status", "saved") \
+        .eq("status", "submitted") \
         .is_("deleted_at", "null") \
         .execute()
     return res.data or []
@@ -70,7 +70,7 @@ def fetch_archive_raw_data(memoir_id: str) -> dict:
     memories_res = supabase_admin.table("memory") \
         .select("id, title, body_text, occurred_start, chapter_id, ai_woven_text") \
         .eq("memoir_id", memoir_id) \
-        .eq("status", "saved") \
+        .eq("status", "submitted") \
         .is_("deleted_at", "null") \
         .execute()
         
