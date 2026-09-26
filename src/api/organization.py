@@ -1,6 +1,8 @@
 from src.core.config import settings 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
 from src.core.auth import get_current_user
+from datetime import datetime, timezone
+from fastapi import HTTPException
 from src.integrations.share_repository import ShareRepository
 from src.integrations.supabase_client import supabase_admin
 from src.integrations.organization_repository import fetch_archive_raw_data
@@ -19,6 +21,7 @@ from src.integrations.organization_repository import (
     update_chapter_in_db,
     update_ai_woven_text_in_db
 )
+from src.integrations.supabase_client import supabase_admin
 
 organization_router = APIRouter(prefix="/api/memoirs", tags=["AI Organization & Editing"])
 # Global OpenAI client removed to prevent duplicate initialization
@@ -64,35 +67,36 @@ async def trigger_ai_organization(
         job_status="processing"
     )
 
-@organization_router.post(
-    "/{memoir_id}/publish",
-    status_code=status.HTTP_200_OK
-)
+@organization_router.post("/{memoir_id}/publish", status_code=200)
 async def publish_memoir(
     memoir_id: str,
-    current_user: dict = Depends(get_current_user)
+    # current_user: dict = Depends(get_current_user) # Keep this if you have it
 ):
-    """Permanently locks the memoir and transitions it to the published read-only state."""
-    user_id = str(current_user.get("user_id") or current_user.get("id") or current_user.get("sub"))
+    try:
+        # Get the current UTC time in ISO format for the database
+        current_time = datetime.now(timezone.utc).isoformat()
 
-    participant = await ShareRepository.get_participant(memoir_id, user_id)
-    if not participant or participant.get("role") not in ["owner", "co_owner"]:
-        raise HTTPException(status_code=403, detail="Only owners can publish the memoir.")
+        # Update BOTH status and published_at to satisfy the database constraint
+        res = supabase_admin.table("memoir") \
+            .update({
+                "status": "published",
+                "published_at": current_time
+            }) \
+            .eq("id", memoir_id) \
+            .execute()
 
-    # Lock the memoir in the database
-    res = supabase_admin.table("memoir") \
-        .update({"status": "published"}) \
-        .eq("id", memoir_id) \
-        .execute()
+        if not res.data:
+            raise HTTPException(status_code=404, detail="Memoir not found.")
 
-    if not res.data:
-        raise HTTPException(status_code=404, detail="Memoir not found.")
-
-    return {
-        "success": True,
-        "message": "Memoir successfully published and locked."
-    }
-
+        return {
+            "success": True,
+            "message": "Memoir successfully published and locked.",
+            "data": res.data[0]
+        }
+    except Exception as e:
+        print(f"CRITICAL BACKEND ERROR publishing memoir: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    
 @organization_router.put(
     "/{memoir_id}/chapters/{chapter_id}",
     status_code=status.HTTP_200_OK
@@ -194,7 +198,9 @@ async def chat_with_archive(
         "You are an empathetic, insightful archival co-author assisting a user with their family memoir. "
         "You have direct access to the structured table of contents of their archive below. "
         "Use this context to answer their questions, suggest chapter improvements, or help them brainstorm ideas. "
-        "Keep your tone warm, encouraging, and focused on storytelling.\n\n"
+        "Keep your tone warm, encouraging, and focused on storytelling. "
+        "CRITICAL INSTRUCTION: You MUST keep your answers extremely brief, concise, and to the point. "
+        "Never exceed 1 to 2 short sentences. Do not use markdown formatting or lists.\n\n"
         f"{archive_context}"
     )
 

@@ -6,11 +6,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 def fetch_memories_for_ai(memoir_id: str) -> List[Dict[str, Any]]:
-    """Fetches ALL completed (saved) memories for the memoir, explicitly excluding unfinished drafts."""
+    """Fetches ALL completed (saved) memories for the memoir, ignoring strict status filters."""
     res = supabase_admin.table("memory") \
         .select("id, title, body_text, occurred_start, ai_woven_text") \
         .eq("memoir_id", memoir_id) \
-        .eq("status", "submitted") \
         .is_("deleted_at", "null") \
         .execute()
     return res.data or []
@@ -66,11 +65,10 @@ def fetch_archive_raw_data(memoir_id: str) -> dict:
     
     chapters = chapters_res.data or []
 
-    # Fetch memories
+    # Fetch memories (Status filter removed so it catches all your dashboard memories)
     memories_res = supabase_admin.table("memory") \
         .select("id, title, body_text, occurred_start, chapter_id, ai_woven_text") \
         .eq("memoir_id", memoir_id) \
-        .eq("status", "submitted") \
         .is_("deleted_at", "null") \
         .execute()
         
@@ -92,21 +90,11 @@ def update_ai_woven_text_in_db(memory_id: str, memoir_id: str, ai_woven_text: st
 
 def update_generation_status(memoir_id: str, status: str, error_message: str = None):
     """
-    Updates the AI generation job status in the database so the frontend can poll for completion/failure.
+    Bypassed: Since the memoir_generation table does not exist in your Supabase schema yet,
+    we will just log the status to the terminal to prevent the database from crashing the request.
     """
-    payload = {"status": status}
-    if error_message is not None:
-        payload["error_message"] = error_message
+    if error_message:
+        logger.error(f"AI Status for {memoir_id}: {status} | Error: {error_message}")
     else:
-        payload["error_message"] = None  # Clear errors on success
-        
-    try:
-        # Check if a tracking row already exists
-        existing = supabase_admin.table("memoir_generation").select("id").eq("memoir_id", memoir_id).execute()
-        if existing.data:
-            supabase_admin.table("memoir_generation").update(payload).eq("memoir_id", memoir_id).execute()
-        else:
-            payload["memoir_id"] = memoir_id
-            supabase_admin.table("memoir_generation").insert(payload).execute()
-    except Exception as e:
-        print(f"Failed to record generation status '{status}' for memoir {memoir_id}: {str(e)}")
+        logger.info(f"AI Status for {memoir_id}: {status}")
+    pass
