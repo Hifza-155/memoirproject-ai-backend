@@ -37,11 +37,9 @@ class MemoryMoveRequest(BaseModel):
     new_chapter_id: str = Field(description="The ID of the chapter this memory should be moved to.")
     
 class ChatMessage(BaseModel):
-    # 1. Enforce strict literal typing to prevent System Prompt Injection
     role: Literal["user", "assistant"] = Field(
         description="The role of the speaker, strictly 'user' or 'assistant'."
     )
-    # 2. Cap individual message size to prevent Denial of Wallet attacks
     content: str = Field(
         max_length=2000, 
         description="The text content of the message, capped at 2000 characters."
@@ -52,7 +50,6 @@ class ChatRequest(BaseModel):
         max_length=2000, 
         description="The user's latest prompt or question for the AI co-author."
     )
-    # 3. Cap the maximum number of history turns stored in the payload
     history: Optional[List[ChatMessage]] = Field(
         default=[], 
         max_length=20, 
