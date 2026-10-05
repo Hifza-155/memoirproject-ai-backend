@@ -62,12 +62,14 @@ if isinstance(origins, str):
 # to allow secure communication with the Next.js frontend client.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=[
+        "http://localhost:3000",
+        "https://memoirproject-ai-backend-nuqi.onrender.com" 
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 @app.get("/", tags=["Root"])
 def read_root():
