@@ -7,3 +7,4 @@ pydantic_settings==2.15.0
 python-dotenv==1.2.3
 SQLAlchemy==2.0.54
 xhtml2pdf==0.2.18
+uvicorn[standard]>=0.30.0
