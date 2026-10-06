@@ -23,7 +23,6 @@ def auth_sign_up(email: str, password: str, full_name: str):
         "email": email,
         "password": password,
         "options": {
-            "email_redirect_to": "http://localhost:3000/login",
             "data": {
                 "full_name": full_name
             }
