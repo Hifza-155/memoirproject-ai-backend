@@ -4,9 +4,9 @@
 using Pydantic BaseSettings.
 """
 
-from typing import List
+from typing import Annotated, List
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -23,8 +23,10 @@ class Settings(BaseSettings):
     media_max_bytes: int = Field(52_428_576, validation_alias="MEDIA_MAX_BYTES")
     media_signed_url_ttl: int = Field(300, validation_alias="MEDIA_SIGNED_URL_TTL")
     
-    # FIXED: Added cors_origins so main.py can dynamically read allowed origins from the environment
-    cors_origins: List[str] = Field(
+    # FIXED: Added cors_origins so main.py can dynamically read allowed origins from the environment.
+    # NoDecode is required: pydantic-settings would otherwise JSON-decode this env var before
+    # assemble_cors_origins() runs, which makes a comma-separated CORS_ORIGINS crash at import.
+    cors_origins: Annotated[List[str], NoDecode] = Field(
         default=["http://localhost:3000", "http://127.0.0.1:3000"],
         validation_alias="CORS_ORIGINS"
     )
@@ -33,13 +35,24 @@ class Settings(BaseSettings):
     @classmethod
     def assemble_cors_origins(cls, v: str | List[str]) -> List[str]:
         """
-        Parses comma-separated CORS origins string from environment variables into a list,
-        or accepts an existing list.
+        Accepts a comma-separated string, a JSON array string, or an existing list,
+        and normalizes it into a clean list of origins.
         """
-        if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",")]
-        elif isinstance(v, list):
+        if isinstance(v, list):
             return v
+        if isinstance(v, str):
+            raw = v.strip()
+            if not raw:
+                return ["http://localhost:3000"]
+            if raw.startswith("["):
+                try:
+                    import json
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, list):
+                        return [str(o).strip() for o in parsed if str(o).strip()]
+                except ValueError:
+                    pass  # fall through to comma-separated handling
+            return [i.strip() for i in raw.split(",") if i.strip()]
         return ["http://localhost:3000"]
 
     model_config = SettingsConfigDict(
